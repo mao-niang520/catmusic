@@ -1,0 +1,44 @@
+# Secrets and local-only files
+keystore.properties
+/keystore/
+local.properties
+/private-assets/
+
+# Build outputs
+.gradle/
+.gradle-home/
+.kotlin/
+build/
+**/build/
+/tools/
+/release/
+/app/release/
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# IDE / OS
+.idea/
+*.iml
+.vscode/
+Thumbs.db
+.DS_Store
+
+# Local reference copy of the upstream MusicDL project.
+# The distributable MusicDL Lite web assets used by the app remain under
+# app/src/main/assets/musicdl.
+/musicdl/
+
+# Sonic Topography-derived assets are intentionally absent because the
+# upstream Non-Commercial Learning License does not grant source
+# redistribution. Our original particle renderer and the license notices stay.
+/sonic-web/
+/app/src/main/assets/sonic/*
+!/app/src/main/assets/sonic/particle.js
+!/app/src/main/assets/sonic/LICENSE-SONIC-TOPOGRAPHY.txt
+!/app/src/main/assets/sonic/LICENSE-THREE.txt
+
+# Local development artifacts
+edge-*/
+*.log

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="cat_bg">#0B0C0F</color>
+    <color name="cat_bg_soft">#111318</color>
+    <color name="cat_cream">#F4F3EC</color>
+    <color name="cat_violet">#B9C7FF</color>
+    <color name="cat_peach">#D9FF57</color>
+    <color name="cat_lime">#D9FF57</color>
+    <color name="icon_bg">#D9FF57</color>
+</resources>

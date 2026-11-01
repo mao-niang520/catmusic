@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0B0C0F" />
+    <meta name="referrer" content="no-referrer" />
+    <title>CatMusic · 在线音乐</title>
+    <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+
+<svg xmlns="http://www.w3.org/2000/svg" class="svg-sprite" aria-hidden="true">
+    <symbol id="i-search" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="6.6"></circle>
+        <path d="M16 16l4 4"></path>
+    </symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24">
+        <path d="M5 12h13"></path>
+        <path d="M13 6l6 6-6 6"></path>
+    </symbol>
+    <symbol id="i-info" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="8.5"></circle>
+        <path d="M12 10.7v5.4"></path>
+        <path d="M12 7.7h.01"></path>
+    </symbol>
+    <symbol id="i-download" viewBox="0 0 24 24">
+        <path d="M12 4v10"></path>
+        <path d="M8 10.5l4 4 4-4"></path>
+        <path d="M5 19h14"></path>
+    </symbol>
+    <symbol id="i-play" viewBox="0 0 24 24">
+        <path d="M8.5 5.8l9.3 6.2-9.3 6.2z" fill="currentColor" stroke="none"></path>
+    </symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24">
+        <path d="M8.3 5.7h2.5v12.6H8.3zM13.2 5.7h2.5v12.6h-2.5z" fill="currentColor" stroke="none"></path>
+    </symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24">
+        <path d="M6.5 5.5v13"></path>
+        <path d="M18 6.5L9.5 12l8.5 5.5z" fill="currentColor" stroke="none"></path>
+    </symbol>
+    <symbol id="i-next" viewBox="0 0 24 24">
+        <path d="M17.5 5.5v13"></path>
+        <path d="M6 6.5l8.5 5.5L6 17.5z" fill="currentColor" stroke="none"></path>
+    </symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24">
+        <path d="M5.5 9l6.5 6 6.5-6"></path>
+    </symbol>
+    <symbol id="i-close" viewBox="0 0 24 24">
+        <path d="M6 6l12 12M18 6L6 18"></path>
+    </symbol>
+    <symbol id="i-music" viewBox="0 0 24 24">
+        <path d="M9 18V6.8l9-2v10.4"></path>
+        <circle cx="6.7" cy="18" r="2.6"></circle>
+        <circle cx="15.7" cy="15.2" r="2.6"></circle>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24">
+        <path d="M5 12.7l4.5 4.3L19 6.9"></path>
+    </symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24">
+        <path d="M12 4.5l8.5 15H3.5z"></path>
+        <path d="M12 9.5v4"></path>
+        <path d="M12 16.8h.01"></path>
+    </symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24">
+        <path d="M12 3l1.7 5.1L19 10l-5.3 1.9L12 17l-1.7-5.1L5 10l5.3-1.9z"></path>
+        <path d="M18.5 15.5l.7 2.1 2.1.7-2.1.7-.7 2.1-.7-2.1-2.1-.7 2.1-.7z"></path>
+    </symbol>
+    <symbol id="i-link" viewBox="0 0 24 24">
+        <path d="M10.3 13.7a4.2 4.2 0 006 0l2.4-2.4a4.2 4.2 0 00-6-6l-1.2 1.2"></path>
+        <path d="M13.7 10.3a4.2 4.2 0 00-6 0l-2.4 2.4a4.2 4.2 0 006 6l1.2-1.2"></path>
+    </symbol>
+    <symbol id="i-headphones" viewBox="0 0 24 24">
+        <path d="M4.5 13v-1a7.5 7.5 0 0115 0v1"></path>
+        <path d="M4.5 13h3v6h-1a2 2 0 01-2-2zM19.5 13h-3v6h1a2 2 0 002-2z"></path>
+    </symbol>
+</svg>
+
+<div class="ambient ambient-a" aria-hidden="true"></div>
+<div class="ambient ambient-b" aria-hidden="true"></div>
+
+<div class="app" id="app">
+
+    <header class="topbar">
+        <button class="brand" id="brandBtn" type="button" aria-label="回到首页">
+            <span class="brand-mark" aria-hidden="true">
+                <i></i><i></i><i></i><i></i>
+            </span>
+            <span class="brand-words">
+                <strong>CAT MUSIC</strong>
+                <small>在线</small>
+            </span>
+        </button>
+        <div class="top-actions">
+            <span class="status-dot" id="offlineDot" title="在线" aria-label="在线"></span>
+            <button class="icon-button" id="searchAgainBtn" type="button" aria-label="重新搜索" hidden>
+                <svg class="icon"><use href="#i-search"></use></svg>
+            </button>
+            <button class="icon-button" id="aboutBtn" type="button" aria-label="关于与声明">
+                <svg class="icon"><use href="#i-info"></use></svg>
+            </button>
+        </div>
+    </header>
+
+    <main class="main" id="main">
+        <section class="hero" id="hero">
+            <p class="eyebrow reveal r1">SEARCH · STREAM · KEEP</p>
+            <h1 class="hero-title reveal r2">今天，想听点什么？</h1>
+
+            <form class="searchbox reveal r3" id="searchForm" autocomplete="off">
+                <svg class="icon search-icon" aria-hidden="true"><use href="#i-search"></use></svg>
+                <input
+                    id="searchInput"
+                    type="search"
+                    name="q"
+                    inputmode="search"
+                    enterkeyhint="search"
+                    maxlength="80"
+                    placeholder="搜索歌曲、歌手或专辑"
+                    aria-label="搜索歌曲、歌手或专辑"
+                    autocomplete="off"
+                    spellcheck="false"
+                />
+                <button class="search-submit" id="searchBtn" type="submit" aria-label="搜索">
+                    <svg class="icon search-arrow"><use href="#i-arrow"></use></svg>
+                    <span class="button-spinner" aria-hidden="true"></span>
+                </button>
+            </form>
+
+            <div class="source-strip reveal r3" id="sourceStrip" aria-label="选择音乐来源"></div>
+
+            <div class="recent-row reveal r3" id="recentRow" hidden>
+                <span class="recent-label">最近</span>
+                <div class="recent-chips" id="recentChips"></div>
+            </div>
+        </section>
+
+        <section class="discover" id="discover">
+            <div class="section-heading reveal r4">
+                <div>
+                    <p class="eyebrow">LITTLE MOMENTS</p>
+                    <h2>随便听听</h2>
+                </div>
+                <span class="section-aside">给耳朵一点灵感</span>
+            </div>
+
+            <div class="mood-grid reveal r4" id="moodGrid">
+                <button class="mood-card mood-lime" type="button" data-query="周杰伦">
+                    <span class="mood-top">华语 · 青春</span>
+                    <span class="mood-title">周杰伦</span>
+                    <span class="mood-sub">把耳机音量调大</span>
+                    <span class="mood-art" aria-hidden="true">
+                        <span class="mood-ring"></span>
+                        <svg class="icon"><use href="#i-headphones"></use></svg>
+                    </span>
+                </button>
+                <button class="mood-card mood-blue" type="button" data-query="晴天">
+                    <span class="mood-top">晴天 · 午后</span>
+                    <span class="mood-title">晴天</span>
+                    <span class="mood-sub">故事的小黄花</span>
+                    <span class="mood-art" aria-hidden="true">
+                        <span class="mood-sun"></span>
+                    </span>
+                </button>
+                <button class="mood-card mood-rose" type="button" data-query="Taylor Swift">
+                    <span class="mood-top">POP · FOLK</span>
+                    <span class="mood-title">Taylor Swift</span>
+                    <span class="mood-sub">一路向前的旋律</span>
+                    <span class="mood-art" aria-hidden="true">
+                        <span class="mood-spark">✦</span>
+                    </span>
+                </button>
+                <button class="mood-card mood-amber" type="button" data-query="Lo-Fi">
+                    <span class="mood-top">CHILL · FOCUS</span>
+                    <span class="mood-title">Lo-Fi</span>
+                    <span class="mood-sub">让时间慢一点</span>
+                    <span class="mood-art" aria-hidden="true">
+                        <span class="mood-wave"><i></i><i></i><i></i><i></i><i></i></span>
+                    </span>
+                </button>
+            </div>
+
+            <div class="discover-note reveal r4">
+                <svg class="icon"><use href="#i-spark"></use></svg>
+                <p>九个来源，一次搜索，优先展示最高音质。请支持正版音乐。</p>
+            </div>
+        </section>
+
+        <section class="results" id="resultsSection" hidden aria-live="polite">
+            <div class="results-head" id="resultsHead">
+                <div>
+                    <p class="eyebrow">SEARCH RESULTS</p>
+                    <h2 id="resultsTitle">搜索结果</h2>
+                    <p class="results-sub" id="resultsSub"></p>
+                </div>
+                <span class="count-pill" id="resultCount" hidden>0</span>
+            </div>
+
+            <div class="default-quality" id="defaultQualityBar">
+                <span class="default-quality-label">默认下载音质</span>
+                <div class="default-quality-options" id="defaultQualityOptions"></div>
+            </div>
+
+            <div class="source-errors" id="sourceErrors" hidden></div>
+
+            <div class="track-list" id="trackList"></div>
+
+            <div class="empty-state" id="emptyState" hidden>
+                <div class="empty-disc" aria-hidden="true">
+                    <span class="empty-disc-label"></span>
+                </div>
+                <h3>没有找到这首歌</h3>
+                <p id="emptyCopy">换个关键词，或者打开更多音乐来源再试试。</p>
+                <button class="ghost-button" type="button" id="emptyRetry">再搜一次</button>
+            </div>
+
+            <div class="end-cap" id="endCap" hidden>
+                <span></span>
+                <p>到底啦 · 音乐版权归原作者所有</p>
+                <span></span>
+            </div>
+        </section>
+
+        <footer class="footer" id="footer">
+            <p>CatMusic · 在线音乐 · 仅供个人学习与合法用途</p>
+            <button type="button" id="footerAbout">关于 & 声明</button>
+        </footer>
+    </main>
+
+    <div class="mini-player" id="miniPlayer" hidden>
+        <div class="mini-progress"><span id="miniProgress"></span></div>
+        <button class="mini-open" id="miniOpen" type="button" aria-label="打开播放器">
+            <div class="mini-cover" id="miniCover"></div>
+            <span class="mini-copy">
+                <strong id="miniTitle">未在播放</strong>
+                <small id="miniArtist"></small>
+            </span>
+        </button>
+        <div class="mini-actions">
+            <button class="mini-button" id="miniPlay" type="button" aria-label="播放或暂停">
+                <svg class="icon"><use href="#i-play"></use></svg>
+            </button>
+            <button class="mini-button" id="miniNext" type="button" aria-label="下一首">
+                <svg class="icon"><use href="#i-next"></use></svg>
+            </button>
+        </div>
+    </div>
+
+</div>
+
+<section class="player" id="player" aria-hidden="true" aria-label="播放器">
+    <div class="player-backdrop" id="playerBackdrop" aria-hidden="true"></div>
+    <div class="player-shade" aria-hidden="true"></div>
+
+    <div class="player-head">
+        <button class="round-icon-button" id="closePlayer" type="button" aria-label="收起播放器">
+            <svg class="icon"><use href="#i-chevron-down"></use></svg>
+        </button>
+        <span class="player-source" id="playerSource">NOW PLAYING</span>
+        <button class="round-icon-button" id="playerDownload" type="button" aria-label="下载当前歌曲">
+            <svg class="icon"><use href="#i-download"></use></svg>
+        </button>
+    </div>
+
+    <div class="player-content">
+        <div class="art-area">
+            <div class="player-art" id="playerArt">
+                <div class="art-fallback" aria-hidden="true">
+                    <svg class="icon"><use href="#i-music"></use></svg>
+                </div>
+                <img id="playerArtImage" alt="" hidden />
+                <span class="art-glint" aria-hidden="true"></span>
+                <span class="art-loading" id="artLoading" hidden><i></i><i></i><i></i></span>
+            </div>
+        </div>
+
+        <div class="player-copy">
+            <div class="title-line">
+                <div class="title-block">
+                    <h2 id="playerTitle">选择一首歌</h2>
+                    <p id="playerArtist">搜索后点击任意结果开始播放</p>
+                </div>
+                <button class="lyric-button" id="lyricsToggle" type="button" aria-label="查看歌词" disabled>
+                    <span>词</span>
+                </button>
+            </div>
+
+            <div class="player-error" id="playerError" hidden>
+                <svg class="icon"><use href="#i-alert"></use></svg>
+                <span id="playerErrorText">暂时无法播放这首歌</span>
+            </div>
+
+            <div class="progress-block">
+                <input class="seek" id="seekBar" type="range" min="0" max="1000" value="0" step="1" aria-label="播放进度" />
+                <div class="time-line">
+                    <span id="currentTime">0:00</span>
+                    <span class="quality-badge" id="qualityBadge" hidden></span>
+                    <span id="totalTime">0:00</span>
+                </div>
+            </div>
+
+            <div class="player-controls">
+                <button class="skip-button" id="prevBtn" type="button" aria-label="上一首">
+                    <svg class="icon"><use href="#i-prev"></use></svg>
+                </button>
+                <button class="main-play" id="playBtn" type="button" aria-label="播放">
+                    <svg class="icon"><use href="#i-play"></use></svg>
+                    <span class="main-spinner" aria-hidden="true"></span>
+                </button>
+                <button class="skip-button" id="nextBtn" type="button" aria-label="下一首">
+                    <svg class="icon"><use href="#i-next"></use></svg>
+                </button>
+            </div>
+
+            <p class="queue-caption" id="queueCaption"></p>
+        </div>
+    </div>
+
+    <div class="lyrics-panel" id="lyricsPanel" aria-hidden="true">
+        <div class="lyrics-head">
+            <span>LYRICS</span>
+            <button class="round-icon-button small" id="closeLyrics" type="button" aria-label="收起歌词">
+                <svg class="icon"><use href="#i-chevron-down"></use></svg>
+            </button>
+        </div>
+        <div class="lyrics-scroll" id="lyricsScroll">
+            <p class="lyrics-empty">暂无歌词</p>
+        </div>
+    </div>
+</section>
+
+<div class="sheet-scrim" id="scrim" hidden></div>
+
+<section class="about-sheet" id="aboutSheet" aria-hidden="true" aria-label="关于与声明">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="about-head">
+        <div class="brand-mark large" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <div>
+            <h2>CatMusic · 在线音乐</h2>
+            <p>轻量、直接的私人音乐搜索器 · 集成自 MusicDL</p>
+        </div>
+        <button class="round-icon-button" id="closeAbout" type="button" aria-label="关闭">
+            <svg class="icon"><use href="#i-close"></use></svg>
+        </button>
+    </div>
+    <div class="about-body">
+        <p class="about-lead">把 musicdl 的搜索与保存体验收进 CatMusic 的一个简单页面。没有账号，没有自建服务器，所有请求都由你的设备直接完成。保存时可以选择存入播放器音乐馆，或只保留音乐文件。</p>
+
+        <div class="about-facts">
+            <div><span>来源</span><strong>网易云 / QQ / 咪咕 / 酷我 / 千千<br />酷狗 / JOOX / 5sing / Jamendo</strong></div>
+            <div><span>保存位置</span><strong>播放器音乐馆 / 音乐 / CatMusic</strong></div>
+            <div><span>版本</span><strong>CatMusic 1.26.0</strong></div>
+        </div>
+
+        <button class="about-link" type="button" data-external="https://github.com/CharlesPikachu/musicdl">
+            <span>
+                <small>灵感与上游项目</small>
+                <strong>CharlesPikachu / musicdl</strong>
+            </span>
+            <svg class="icon"><use href="#i-arrow"></use></svg>
+        </button>
+        <button class="about-link" type="button" data-external="https://github.com/CharlesPikachu/musicsquare">
+            <span>
+                <small>公开接口与浏览器实现</small>
+                <strong>CharlesPikachu / MusicSquare</strong>
+            </span>
+            <svg class="icon"><use href="#i-arrow"></use></svg>
+        </button>
+        <button class="about-link" type="button" data-external="https://github.com/CharlesPikachu/musicdl/blob/master/LICENSE">
+            <span>
+                <small>上游项目许可证</small>
+                <strong>PolyForm Noncommercial 1.0.0</strong>
+            </span>
+            <svg class="icon"><use href="#i-arrow"></use></svg>
+        </button>
+
+        <div class="disclaimer">
+            <svg class="icon"><use href="#i-info"></use></svg>
+            <p>本应用是非官方、非商业的轻量客户端，仅用于个人学习与合法授权内容的检索/试听。应用不托管音频文件，不内置账号 Cookie，也不提供 DRM 解密；无法获取公开播放地址的曲目会直接提示不可用。音乐版权归各音乐平台及权利人所有，请遵守平台条款并支持正版。</p>
+        </div>
+
+        <p class="about-fineprint">API 可能随平台调整而失效。若某个来源暂时不可用，可以切换其他来源。搜索会优先解析并显示最高可用音质的真实文件大小，默认按无损下载。QQ 音乐仅展示可免费试听的曲目。Jamendo 曲目来自 Creative Commons 曲库。</p>
+    </div>
+</section>
+
+<div class="sheet-scrim save-scrim" id="saveScrim" hidden></div>
+
+<section class="save-sheet" id="saveSheet" aria-hidden="true" aria-label="保存歌曲">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="save-head">
+        <div class="save-cover" id="saveCover">
+            <svg class="icon"><use href="#i-music"></use></svg>
+        </div>
+        <div class="save-copy">
+            <h2 id="saveTitle">保存歌曲</h2>
+            <p id="saveArtist"></p>
+            <span class="save-size" id="saveSize"></span>
+        </div>
+        <button class="round-icon-button" id="closeSave" type="button" aria-label="关闭">
+            <svg class="icon"><use href="#i-close"></use></svg>
+        </button>
+    </div>
+
+    <div class="save-quality-block">
+        <div class="save-quality-head">
+            <span>音质</span>
+            <span id="saveQualityNote">标准</span>
+        </div>
+        <div class="save-quality-options" id="saveQualityOptions"></div>
+    </div>
+
+    <div class="save-options" id="saveOptions">
+        <button class="save-option is-selected" id="saveModeLibrary" type="button">
+            <span class="save-option-copy">
+                <strong>存入播放器</strong>
+                <small>加入音乐馆，可离线播放、统计与使用音浪</small>
+            </span>
+            <span class="save-radio" aria-hidden="true"></span>
+        </button>
+        <button class="save-option" id="saveModePublic" type="button">
+            <span class="save-option-copy">
+                <strong>仅保存到音乐 / CatMusic</strong>
+                <small>保留文件供其他应用使用，不加入音乐馆</small>
+            </span>
+            <span class="save-radio" aria-hidden="true"></span>
+        </button>
+    </div>
+
+    <label class="save-lyrics" id="saveLyricsRow">
+        <input type="checkbox" id="saveLyrics" checked />
+        <span>
+            <strong>同时加入歌词</strong>
+            <small id="saveLyricsHint">播放页可直接查看</small>
+        </span>
+    </label>
+
+    <div class="save-progress" id="saveProgress" hidden>
+        <div class="save-progress-head">
+            <span id="saveProgressText">准备下载…</span>
+            <span id="saveProgressPct"></span>
+        </div>
+        <div class="save-progress-track"><span id="saveProgressBar"></span></div>
+    </div>
+
+    <div class="save-actions">
+        <button class="save-cancel" id="saveCancel" type="button">取消</button>
+        <button class="save-confirm" id="saveConfirm" type="button">存入播放器</button>
+    </div>
+</section>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<audio id="audio" preload="metadata"></audio>
+
+<script src="app.js"></script>
+<script>
+    // The WebView is hosted inside a Compose AndroidView. On its first layout
+    // Blink can keep a zero-height viewport for percentage/100vh rules even
+    // after the native view has a real size. Pin the document to the visual
+    // viewport and keep it in sync so the page never collapses.
+    (function () {
+        function fitViewport() {
+            var height = window.innerHeight ||
+                (window.visualViewport && window.visualViewport.height);
+            if (height > 0) {
+                document.documentElement.style.height = height + "px";
+                document.body.style.height = height + "px";
+            }
+        }
+        fitViewport();
+        window.addEventListener("resize", fitViewport);
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener("resize", fitViewport);
+        }
+    })();
+</script>
+</body>
+</html>

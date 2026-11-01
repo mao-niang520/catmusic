@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CatMusic</string>
+    <string name="app_tagline">把每一次心动，都记成旋律</string>
+    <string name="notification_channel_name">音乐播放</string>
+    <string name="notification_channel_description">CatMusic 的后台播放控制</string>
+</resources>
