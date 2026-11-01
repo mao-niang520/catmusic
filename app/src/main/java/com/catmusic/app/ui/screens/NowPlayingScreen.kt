@@ -305,9 +305,9 @@ fun NowPlayingScreen(
             exit = lyricsExit,
             modifier = Modifier.fillMaxSize()
         ) {
-            // Native gradient lyrics and the original Three.js lyrics get a
-            // soft cross-fade when the 音浪 switch changes, rather than a hard
-            // cut between renderers.
+            // Native gradient lyrics and the original CatMusic sound field get
+            // a soft cross-fade when the 音浪 switch changes, rather than a
+            // hard cut between renderers.
             Crossfade(
                 targetState = audioReactiveOn,
                 animationSpec = tween(320, easing = FastOutSlowInEasing),
@@ -315,12 +315,11 @@ fun NowPlayingScreen(
                 modifier = Modifier.fillMaxSize()
             ) { reactive ->
                 if (reactive) {
-                    // With 音浪 enabled, the lyric stage is the original Sonic
-                    // Topography Three.js scene in a full-screen WebView.
-                    // Hosting the whole lyric UI in the page keeps the WebGL
-                    // canvas below every control without SurfaceView/z-order
-                    // workarounds.
-                    SonicLyricsScreen(
+                    // With 音浪 enabled, the lyric stage is CatMusic's own
+                    // WebGL sound field in a full-screen WebView. Hosting the
+                    // whole lyric UI in the page keeps the canvas below every
+                    // control without SurfaceView/z-order workarounds.
+                    SoundFieldScreen(
                         track = track,
                         player = player,
                         durationMs = durationMs,

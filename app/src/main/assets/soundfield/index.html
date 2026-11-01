@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#07070b">
+  <title>CatMusic · 声场</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="ambient" aria-hidden="true"></div>
+  <canvas id="field" aria-hidden="true"></canvas>
+  <div class="vignette" aria-hidden="true"></div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <main class="shell" id="shell">
+    <header class="topbar">
+      <button class="icon-button" id="close-page" type="button" aria-label="返回封面">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M14.8 5.4 8.2 12l6.6 6.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+
+      <div class="track-meta" id="track-meta">
+        <span class="track-kicker">CatMusic 声场</span>
+        <div class="track-line">
+          <span class="track-title" id="track-title">正在聆听</span>
+          <span class="track-divider" id="track-divider" aria-hidden="true">·</span>
+          <span class="track-artist" id="track-artist"></span>
+        </div>
+      </div>
+
+      <button class="icon-button" id="open-menu" type="button" aria-label="声场设置" aria-haspopup="dialog" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="5.3" cy="12" r="1.45" fill="currentColor"/>
+          <circle cx="12" cy="12" r="1.45" fill="currentColor"/>
+          <circle cx="18.7" cy="12" r="1.45" fill="currentColor"/>
+        </svg>
+      </button>
+    </header>
+
+    <section class="lyrics-stage" id="lyrics-stage" aria-live="polite">
+      <div class="lyrics-plane" id="lyrics-plane" hidden>
+        <div class="lyrics-track" id="lyrics-track"></div>
+      </div>
+
+      <div class="lyrics-state" id="lyrics-loading">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>正在读取歌词</span>
+      </div>
+
+      <div class="lyrics-state empty-state" id="lyrics-empty" hidden>
+        <span class="empty-mark" aria-hidden="true">♪</span>
+        <strong>还没有歌词</strong>
+        <p>导入 LRC 或 TXT，让文字随着声场一起呼吸。</p>
+        <button class="empty-button" id="import-empty" type="button">导入歌词</button>
+      </div>
+
+      <div class="plain-lyrics" id="plain-lyrics" hidden>
+        <div class="plain-inner" id="plain-inner"></div>
+      </div>
+    </section>
+
+    <div class="dock" id="dock">
+      <div class="calibration-panel" id="calibration" hidden>
+        <div class="calibration-head">
+          <div>
+            <span class="calibration-title">歌词校准</span>
+            <span class="calibration-note">＋ 歌词延后 · − 歌词提前</span>
+          </div>
+          <button class="text-button" id="calibration-done" type="button">完成</button>
+        </div>
+        <div class="calibration-row">
+          <button class="step-button" id="offset-minus" type="button" aria-label="歌词提前 0.1 秒">−0.1</button>
+          <span class="offset-value" id="offset-value">+0.0 秒</span>
+          <button class="step-button" id="offset-plus" type="button" aria-label="歌词延后 0.1 秒">+0.1</button>
+          <button class="text-button" id="offset-reset" type="button">归零</button>
+        </div>
+      </div>
+
+      <div class="transport-bar">
+        <button class="round-button play-button" id="play-button" type="button" aria-label="播放">
+          <svg class="play-icon" id="play-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M8.4 5.5c0-.9.98-1.45 1.74-1l8.6 5.5c.74.47.74 1.53 0 2l-8.6 5.5c-.76.45-1.74-.1-1.74-1V5.5Z" fill="currentColor"/>
+          </svg>
+          <svg class="pause-icon" id="pause-icon" viewBox="0 0 24 24" aria-hidden="true" hidden>
+            <rect x="7.3" y="5.4" width="3.2" height="13.2" rx="1.5" fill="currentColor"/>
+            <rect x="13.5" y="5.4" width="3.2" height="13.2" rx="1.5" fill="currentColor"/>
+          </svg>
+        </button>
+
+        <div class="progress-area" id="progress-area" aria-label="播放进度">
+          <div class="progress-rail">
+            <div class="progress-track"></div>
+            <div class="progress-fill" id="progress-fill"></div>
+            <div class="progress-thumb" id="progress-thumb"></div>
+          </div>
+          <div class="time-row">
+            <span id="position-time">0:00</span>
+            <span id="duration-time">0:00</span>
+          </div>
+        </div>
+
+        <button class="round-button field-button" id="field-toggle" type="button" aria-label="关闭声场">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3.7" y="10.2" width="2.0" height="3.6" rx="1" fill="currentColor" opacity=".45"/>
+            <rect x="7.7" y="7.8" width="2.0" height="8.4" rx="1" fill="currentColor" opacity=".66"/>
+            <rect x="11.7" y="4.8" width="2.0" height="14.4" rx="1" fill="currentColor"/>
+            <rect x="15.7" y="8.8" width="2.0" height="6.4" rx="1" fill="currentColor" opacity=".72"/>
+            <rect x="19.7" y="10.6" width="2.0" height="2.8" rx="1" fill="currentColor" opacity=".45"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="menu-layer" id="menu-layer" hidden>
+      <div class="menu-scrim" id="menu-scrim"></div>
+      <section class="menu-panel" id="menu-panel" role="dialog" aria-modal="true" aria-labelledby="menu-title">
+        <div class="menu-head">
+          <div>
+            <span class="menu-kicker">SOUND FIELD</span>
+            <h2 id="menu-title">声场设置</h2>
+          </div>
+          <button class="menu-close" id="close-menu" type="button" aria-label="关闭设置">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m7 7 10 10M17 7 7 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+
+        <p class="menu-intro" id="field-hint">拖动空白处旋转星潮，双指张合缩放；轻点歌词跳转。</p>
+
+        <section class="menu-section effect-section">
+          <div class="section-heading">
+            <span>声场效果</span>
+            <span class="section-value" id="effect-name">星潮</span>
+          </div>
+          <div class="effect-grid" role="group" aria-label="选择声场效果">
+            <button class="effect-card" type="button" data-effect="orbit" aria-pressed="true">
+              <span class="effect-glyph orbit-glyph" aria-hidden="true">
+                <i></i><i></i><i></i><i></i><i></i>
+              </span>
+              <span class="effect-copy">
+                <strong>星潮</strong>
+                <small>万点封面球</small>
+              </span>
+              <span class="effect-check" aria-hidden="true"></span>
+            </button>
+            <button class="effect-card" type="button" data-effect="tide" aria-pressed="false">
+              <span class="effect-glyph tide-glyph" aria-hidden="true">
+                <i></i><i></i><i></i>
+              </span>
+              <span class="effect-copy">
+                <strong>回声</strong>
+                <small>声波涟漪</small>
+              </span>
+              <span class="effect-check" aria-hidden="true"></span>
+            </button>
+          </div>
+          <p class="effect-description" id="effect-description">星潮把当前封面铺成约一万个光点；低频让球壳呼吸，鼓点将它炸成空心云团。</p>
+        </section>
+
+        <section class="menu-section setting-section">
+          <div class="slider-row">
+            <div class="slider-head">
+              <span>鼓点律动</span>
+              <span class="section-value" id="beat-value">65%</span>
+            </div>
+            <input class="range-input" id="beat-range" type="range" min="0" max="100" step="5" value="65" aria-label="鼓点律动强度">
+          </div>
+          <div class="slider-row">
+            <div class="slider-head">
+              <span>歌词行数</span>
+              <span class="section-value" id="lines-value">7 行</span>
+            </div>
+            <input class="range-input" id="lines-range" type="range" min="3" max="10" step="1" value="7" aria-label="歌词显示行数">
+          </div>
+          <div class="slider-row">
+            <div class="slider-head">
+              <span>陀螺仪灵敏度</span>
+              <span class="section-value" id="gyro-sensitivity-value">100%</span>
+            </div>
+            <input class="range-input" id="gyro-sensitivity-range" type="range" min="0" max="200" step="10" value="100" aria-label="陀螺仪灵敏度">
+          </div>
+        </section>
+
+        <section class="menu-section action-section">
+          <div class="action-grid">
+            <button class="action-row" type="button" data-action="gyro">
+              <span>姿态陀螺仪</span>
+              <span class="action-value" id="gyro-value">关</span>
+            </button>
+            <button class="action-row" type="button" data-action="reset-view">重置声场视角</button>
+            <button class="action-row" type="button" data-action="calibrate">
+              <span>歌词校准</span>
+              <span class="action-value" id="menu-offset">+0.0s</span>
+            </button>
+            <button class="action-row" type="button" data-action="import">导入 / 更换歌词</button>
+            <button class="action-row" type="button" data-action="close-soundfield">关闭声场</button>
+            <button class="action-row" type="button" data-action="back-cover">返回封面</button>
+          </div>
+        </section>
+
+        <p class="menu-foot">全部画面在本机 WebGL 中生成 · 不联网 · 不使用麦克风</p>
+      </section>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </main>
+
+  <div class="boot" id="boot">
+    <div class="boot-inner">
+      <span class="boot-eyebrow">CatMusic</span>
+      <span class="boot-title">声场</span>
+      <span class="boot-line"><i></i></span>
+    </div>
+  </div>
+
+  <script src="field.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

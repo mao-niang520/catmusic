@@ -8,9 +8,10 @@ open-source license.
 This root license applies to CatMusic original code and documentation only.
 Third-party components retain their own licenses; see NOTICE.md. In
 particular, MusicDL/MusicDL Lite assets are also PolyForm Noncommercial,
-while QWEA0 Liquid Glass, Three.js and MusicSquare remain under their
-respective MIT/Apache licenses. The Sonic Topography soundwave source is
-not included in this repository.
+while QWEA0 Liquid Glass and MusicSquare remain under their respective
+MIT/Apache licenses. The full-screen sound field in
+`app/src/main/assets/soundfield/` is original CatMusic code and is covered by
+this root license.
 
 # PolyForm Noncommercial License 1.0.0
 

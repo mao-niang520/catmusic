@@ -63,7 +63,7 @@ class PlaybackService : MediaSessionService() {
                 fadeJob = null
                 if (player.volume < 1f) player.volume = 1f
                 // The PCM sink stops receiving buffers while paused. Clear
-                // the last snapshot so the WebView terrain does not keep the
+                // the last snapshot so the WebView sound field does not keep the
                 // final frame of audio energy frozen on screen.
                 AudioReactiveSignal.reset()
             }

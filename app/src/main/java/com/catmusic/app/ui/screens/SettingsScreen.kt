@@ -292,7 +292,7 @@ fun SettingsScreen(
                         Text(
                             text = "导入时会把音频副本保存进 CatMusic 的私有空间，之后删除手机上的原文件不影响播放。在软件中删除只会移除软件副本、封面、歌词和歌单记录；手机原文件永远不会被软件删除。\n\n" +
                                 "“在线”页会联网检索、试听和下载公开音乐，只向接口发送搜索关键词；本地曲库、封面、歌词、歌单与统计始终留在设备上，不会上传。下载时默认使用无损，也可选择标准 / 较高音质（以来源实际支持为准），并选择存入播放器（加入音乐馆，可一并保存歌词）或仅保存到「音乐 / CatMusic」；两种保存位置彼此独立，也都不影响设备上的原文件。\n\n" +
-                                "“音浪”地形直接分析解码后的本地音频电平、频段与节拍，不需要麦克风权限，不保存音频，也不会联网上传。可在播放页底部控制坞或右上角菜单随时开启或关闭。",
+                                "“音浪”声场直接分析解码后的本地音频电平、频段与节拍，不需要麦克风权限，不保存音频，也不会联网上传。可在播放页底部控制坞或右上角菜单随时开启或关闭。",
                             style = MaterialTheme.typography.bodySmall,
                             color = CatTextTertiary,
                             lineHeight = 18.sp
@@ -671,7 +671,7 @@ private fun AudioLevelCard(
                     )
                     Spacer(Modifier.height(3.dp))
                     Text(
-                        text = "全屏音浪歌词页的地形密度与粒子数量",
+                        text = "全屏声场歌词页的粒子密度与波层数量",
                         style = MaterialTheme.typography.bodySmall,
                         color = CatTextTertiary
                     )
@@ -724,7 +724,7 @@ private fun AudioLevelCard(
             )
             Spacer(Modifier.height(5.dp))
             Text(
-                text = "「极致」会拉满地形密度、辉光与漂浮粒子，建议在骁龙 8 Elite 等高性能设备上使用。歌词页使用原版 Three.js 地形，密度随等级提升，并会自动调整渲染分辨率以保持流畅。",
+                text = "「极致」会拉满星潮粒子、辉光与回声波层，建议在旗舰设备上使用。声场使用 CatMusic 原创 WebGL 渲染，并会根据等级调整细腻度与内部渲染分辨率。",
                 style = MaterialTheme.typography.bodySmall,
                 color = CatTextTertiary.copy(alpha = 0.72f),
                 lineHeight = 17.sp,
@@ -732,7 +732,7 @@ private fun AudioLevelCard(
             )
             Spacer(Modifier.height(7.dp))
             Text(
-                text = "歌词页音浪基于 Sonic Topography 的 Three.js 着色器（Non-Commercial Learning License，仅个人非商业使用）。",
+                text = "画面全部在本机生成，不联网，也不包含任何第三方音浪场景代码。",
                 style = MaterialTheme.typography.bodySmall,
                 color = CatTextTertiary.copy(alpha = 0.52f),
                 lineHeight = 16.sp,
@@ -776,7 +776,7 @@ private fun LyricFrameRateCard(
                 Spacer(Modifier.width(13.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        text = "3D 歌词帧率",
+                        text = "声场帧率",
                         style = MaterialTheme.typography.titleSmall.copy(
                             fontWeight = FontWeight.Medium
                         ),
@@ -784,7 +784,7 @@ private fun LyricFrameRateCard(
                     )
                     Spacer(Modifier.height(3.dp))
                     Text(
-                        text = "限制音浪歌词页的渲染速率",
+                        text = "限制声场歌词页的渲染速率",
                         style = MaterialTheme.typography.bodySmall,
                         color = CatTextTertiary
                     )

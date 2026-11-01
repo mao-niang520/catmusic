@@ -10,10 +10,10 @@
 -dontwarn okio.**
 -dontwarn org.conscrypt.**
 
-# Local Sonic Topography lyric stage bridge
+# Local CatMusic sound field WebView bridge
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }
--keep class com.catmusic.app.ui.screens.SonicLyricsBridge { *; }
+-keep class com.catmusic.app.ui.screens.SoundFieldBridge { *; }
 -keep class com.catmusic.app.online.MusicBridge { *; }
 -keep class com.catmusic.app.online.MusicApi { *; }

@@ -30,15 +30,6 @@ Thumbs.db
 # app/src/main/assets/musicdl.
 /musicdl/
 
-# Sonic Topography-derived assets are intentionally absent because the
-# upstream Non-Commercial Learning License does not grant source
-# redistribution. Our original particle renderer and the license notices stay.
-/sonic-web/
-/app/src/main/assets/sonic/*
-!/app/src/main/assets/sonic/particle.js
-!/app/src/main/assets/sonic/LICENSE-SONIC-TOPOGRAPHY.txt
-!/app/src/main/assets/sonic/LICENSE-THREE.txt
-
 # Local development artifacts
 edge-*/
 *.log

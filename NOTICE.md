@@ -12,10 +12,22 @@ The root CatMusic license does not relicense them.
 | **MusicDL / musicdl** by CharlesPikachu and MusicDL Lite contributors | Online search flow and the bundled `app/src/main/assets/musicdl` page | PolyForm Noncommercial 1.0.0 | [`licenses/MUSICDL-POLYFORM-NONCOMMERCIAL.txt`](licenses/MUSICDL-POLYFORM-NONCOMMERCIAL.txt), [`licenses/MUSICDL-NOTICE.md`](licenses/MUSICDL-NOTICE.md), `app/src/main/assets/musicdl/legal/` |
 | **MusicSquare** by CharlesPikachu | Reference for public browser-facing search/resolve bridges | Apache License 2.0 | [`licenses/MUSICSQUARE-APACHE-2.0.txt`](licenses/MUSICSQUARE-APACHE-2.0.txt) |
 | **QWEA0 Liquid Glass Android** | Real liquid-glass surfaces | MIT | [`licenses/LIQUID-GLASS-ANDROID-MIT.txt`](licenses/LIQUID-GLASS-ANDROID-MIT.txt) |
-| **Three.js** | Used by the developer's optional Sonic terrain scene; Three.js source is not included in this export | MIT | [`licenses/THREE-MIT.txt`](licenses/THREE-MIT.txt), [`app/src/main/assets/sonic/LICENSE-THREE.txt`](app/src/main/assets/sonic/LICENSE-THREE.txt) |
 | **Outfit** | Bundled UI font | SIL Open Font License 1.1 | [`licenses/OUTFIT-OFL.txt`](licenses/OUTFIT-OFL.txt) |
-| **Sonic Topography** by yin-yizhen | Source of the developer's optional soundwave terrain; **source is not included in this repository** | Non-Commercial Learning License | [`app/src/main/assets/sonic/LICENSE-SONIC-TOPOGRAPHY.txt`](app/src/main/assets/sonic/LICENSE-SONIC-TOPOGRAPHY.txt), [`docs/SONIC-ASSETS.md`](docs/SONIC-ASSETS.md) |
 | AndroidX / Media3 / Compose | Android UI, playback and media session | Apache License 2.0 (dependency licenses) | Dependency metadata |
+
+## Sound field
+
+The full-screen sound field in `app/src/main/assets/soundfield/` — including
+the page layout, CSS, the 10,000-point cover globe, the perspective Echo wave
+lattice, the WebGL shaders, gesture handling and the Kotlin bridge — is
+**original CatMusic code**. It contains no third-party graphics libraries,
+terrain scenes, geometries, shaders or copied assets. It is covered by the
+root CatMusic PolyForm Noncommercial license and by the copyright of the
+CatMusic author.
+
+The two effects use only locally decoded PCM bands and a tiny cover preview
+supplied by the app. The WebView is configured with `blockNetworkLoads = true`
+and the Android app requests no microphone permission.
 
 ## Additional notes
 
@@ -24,13 +36,13 @@ The root CatMusic license does not relicense them.
   CatMusic does not host or redistribute audio files. Online features are for
   personal, noncommercial use and are subject to the platforms' terms.
 - CatMusic is not affiliated with, endorsed by, or maintained by any music
-  platform, MusicDL, MusicSquare, QWEA0, Three.js or Sonic Topography.
+  platform, MusicDL, MusicSquare, QWEA0 or any other third party.
 - The developer's private signing key, real WeChat donation QR code, release
   APKs, personal music library, downloaded audio and personal artwork are not
   included. The `donation_wechat.jpg` in this repository is a deliberately
   non-scannable placeholder.
-- The public screenshot in `docs/images/` uses a synthetic album cover and
-  contains no real album art or lyrics.
-- This source export intentionally omits the Sonic Topography-derived
-  `index.html`, `bundle.js`, `style.css`, and the `sonic-web/` source tree.
-  See [docs/SONIC-ASSETS.md](docs/SONIC-ASSETS.md) before adding them.
+- The public screenshots in `docs/images/` use synthetic album artwork and
+  demo lyrics. They contain no real album art, personal media or real lyrics.
+- This source export intentionally omits the developer's local MusicDL
+  reference checkout. The distributable MusicDL Lite web assets that the app
+  actually uses remain under `app/src/main/assets/musicdl` with their notices.

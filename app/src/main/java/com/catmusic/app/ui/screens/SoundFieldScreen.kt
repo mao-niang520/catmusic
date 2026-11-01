@@ -68,27 +68,27 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-private const val TAG = "SonicLyrics"
+private const val TAG = "SoundField"
 private const val JS_BRIDGE_NAME = "CatMusicBridge"
 private const val MISSING_LYRICS_JSON = "{\"hasTiming\":false,\"lines\":[],\"missing\":true}"
 private const val LOADING_LYRICS_JSON = "{\"loading\":true}"
 
 /**
- * The lyric stage backed by the original Sonic Topography Three.js renderer.
+ * The full-screen CatMusic sound field stage.
  *
- * This WebView is only used while 音浪 is on. It owns the whole lyric-page UI so
- * the WebGL canvas can be the bottom layer (no native controls need to draw
- * above a surface view). The bridge carries decoded bands and transport state
- * in, and only simple commands out; the page never loads remote content and the
- * app still has no network or microphone permission.
+ * The page is CatMusic's own HTML/CSS/WebGL implementation. It owns the lyric
+ * UI so the two WebGL effects can sit below every control without native
+ * SurfaceView z-order workarounds. The bridge carries decoded bands, artwork
+ * and transport state in, and only simple commands out. The page never loads
+ * remote content and the app still has no network or microphone permission.
  */
 // The bridge methods are all annotated with @JavascriptInterface (lint cannot
 // see through the private Kotlin bridge class) and the WebView only ever loads
 // local, first-party assets. Keeping JavaScript on is required for the WebGL
-// lyric stage.
+// sound field stage.
 @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
 @Composable
-fun SonicLyricsScreen(
+fun SoundFieldScreen(
     track: Track?,
     player: PlayerUiSnapshot,
     durationMs: Long,
@@ -112,8 +112,8 @@ fun SonicLyricsScreen(
     val appContext = context.applicationContext
 
     var pageReady by remember { mutableStateOf(false) }
-    val holder = remember { SonicLyricsWebHolder() }
-    val jsBridge = remember { SonicLyricsBridge(Handler(Looper.getMainLooper())) }
+    val holder = remember { SoundFieldWebHolder() }
+    val jsBridge = remember { SoundFieldBridge(Handler(Looper.getMainLooper())) }
 
     fun evaluateJavascript(script: String) {
         if (!pageReady) return
@@ -224,11 +224,11 @@ fun SonicLyricsScreen(
     }
 
     var lyricsState by remember(track?.id, track?.lyricsFile) {
-        mutableStateOf<SonicLyricsState>(
+        mutableStateOf<SoundFieldState>(
             if (track?.lyricsFile.isNullOrBlank()) {
-                SonicLyricsState.Ready(MISSING_LYRICS_JSON)
+                SoundFieldState.Ready(MISSING_LYRICS_JSON)
             } else {
-                SonicLyricsState.Loading
+                SoundFieldState.Loading
             }
         )
     }
@@ -236,10 +236,10 @@ fun SonicLyricsScreen(
     LaunchedEffect(track?.id, track?.lyricsFile) {
         val key = track?.lyricsFile
         if (key.isNullOrBlank()) {
-            lyricsState = SonicLyricsState.Ready(MISSING_LYRICS_JSON)
+            lyricsState = SoundFieldState.Ready(MISSING_LYRICS_JSON)
             return@LaunchedEffect
         }
-        lyricsState = SonicLyricsState.Loading
+        lyricsState = SoundFieldState.Loading
         val json = withContext(Dispatchers.IO) {
             val file = File(context.filesDir, "lyrics/$key")
             if (!file.exists()) return@withContext MISSING_LYRICS_JSON
@@ -247,18 +247,18 @@ fun SonicLyricsScreen(
                 val parsed = LrcParser.parse(file.readText())
                 if (parsed.lines.isEmpty()) MISSING_LYRICS_JSON else lyricsJson(parsed)
             }.getOrElse {
-                Log.w(TAG, "Unable to read lyrics for the sonic stage", it)
+                Log.w(TAG, "Unable to read lyrics for the sound field stage", it)
                 MISSING_LYRICS_JSON
             }
         }
-        lyricsState = SonicLyricsState.Ready(json)
+        lyricsState = SoundFieldState.Ready(json)
     }
 
     LaunchedEffect(pageReady, lyricsState) {
         if (!pageReady) return@LaunchedEffect
         val json = when (val state = lyricsState) {
-            SonicLyricsState.Loading -> LOADING_LYRICS_JSON
-            is SonicLyricsState.Ready -> state.json
+            SoundFieldState.Loading -> LOADING_LYRICS_JSON
+            is SoundFieldState.Ready -> state.json
         }
         evaluateJavascript("window.catmusic&&window.catmusic.lyrics($json)")
     }
@@ -274,8 +274,8 @@ fun SonicLyricsScreen(
     }
 
     // The accent is sampled from the current local cover (or its deterministic
-    // fallback when the song has no artwork). The 3D field cross-fades to a
-    // palette derived from that hue, so the wave scene belongs to the cover.
+    // fallback when the song has no artwork). Both effects blend toward a
+    // palette derived from that hue, so the stage belongs to the cover.
     LaunchedEffect(pageReady, coverAccent) {
         if (!pageReady) return@LaunchedEffect
         val rgb = coverAccent.toArgb() and 0xFFFFFF
@@ -312,7 +312,7 @@ fun SonicLyricsScreen(
             .toString()
         evaluateJavascript("window.catmusic&&window.catmusic.playback($json)")
         // Safety net in addition to the 20 Hz audio loop: playback updates
-        // also carry the latest energy, so the terrain never stays frozen if
+        // also carry the latest energy, so the field never stays frozen if
         // a dedicated audio tick is delayed.
         val energyJson = audioJson(freshAudioEnergy(), player.isPlaying)
         evaluateJavascript("window.catmusic&&window.catmusic.audio($energyJson)")
@@ -436,7 +436,7 @@ fun SonicLyricsScreen(
                     holder.webView = this
                     if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
                     loadUrl(
-                        "file:///android_asset/sonic/index.html" +
+                        "file:///android_asset/soundfield/index.html" +
                             "?quality=${audioVisualLevel.key}&fps=${frameRate.key}"
                     )
                 }
@@ -453,16 +453,16 @@ fun SonicLyricsScreen(
     }
 }
 
-private sealed interface SonicLyricsState {
-    data object Loading : SonicLyricsState
-    data class Ready(val json: String) : SonicLyricsState
+private sealed interface SoundFieldState {
+    data object Loading : SoundFieldState
+    data class Ready(val json: String) : SoundFieldState
 }
 
-private class SonicLyricsWebHolder {
+private class SoundFieldWebHolder {
     var webView: WebView? = null
 }
 
-class SonicLyricsBridge(
+class SoundFieldBridge(
     private val mainHandler: Handler
 ) {
     var onReady: () -> Unit = {}
@@ -535,7 +535,7 @@ private fun lyricsJson(parsed: ParsedLyrics): String {
 /**
  * The PCM sink publishes at ~25 Hz. Treat the snapshot as live only while it
  * is fresh: the tap has no buffers to process while paused, and PlaybackService
- * also resets it. This keeps the terrain responsive even if a playback-state
+ * also resets it. This keeps both effects responsive even if a playback-state
  * UI snapshot arrives a frame late, without leaving a frozen last frame.
  */
 private fun freshAudioEnergy(): AudioEnergy {
@@ -549,7 +549,7 @@ private fun freshAudioEnergy(): AudioEnergy {
 }
 
 /**
- * A tiny JPEG data URL is enough for the particle colour field and avoids
+ * A tiny JPEG data URL is enough for the cover-coloured field and avoids
  * exposing arbitrary app files to the WebView. The cover never touches the
  * network here: the page runs with blockNetworkLoads.
  */
