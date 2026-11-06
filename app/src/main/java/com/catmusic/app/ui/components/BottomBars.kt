@@ -71,9 +71,10 @@ fun CatBottomBar(
         RealLiquidGlassLayer(
             modifier = Modifier.matchParentSize(),
             cornerRadius = 27.dp,
-            refractionHeight = 44.dp,
-            bevelWidth = 28.dp,
-            dispersion = 0.20f,
+            refractionHeight = 58.dp,
+            bevelWidth = 36.dp,
+            dispersion = 0.30f,
+            saturation = 152f,
             // Nearly colourless: the live backdrop should read through the bar.
             tintArgb = 0x0D000000
         )

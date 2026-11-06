@@ -1,6 +1,7 @@
 package com.catmusic.app.ui.screens
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color as AndroidColor
@@ -31,6 +32,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -47,15 +49,17 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.repeatOnLifecycle
 import com.catmusic.app.BuildConfig
 import com.catmusic.app.data.AudioVisualLevel
+import com.catmusic.app.data.LyricDisplayLoader
 import com.catmusic.app.data.LyricFrameRate
+import com.catmusic.app.data.LyricTranslationMode
 import com.catmusic.app.data.Track
 import com.catmusic.app.playback.AudioEnergy
 import com.catmusic.app.playback.AudioReactiveSignal
 import com.catmusic.app.ui.components.PlayerUiSnapshot
-import com.catmusic.app.util.LrcParser
 import com.catmusic.app.util.ParsedLyrics
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -80,7 +84,8 @@ private const val LOADING_LYRICS_JSON = "{\"loading\":true}"
  * UI so the two WebGL effects can sit below every control without native
  * SurfaceView z-order workarounds. The bridge carries decoded bands, artwork
  * and transport state in, and only simple commands out. The page never loads
- * remote content and the app still has no network or microphone permission.
+ * remote content and the sound field never accesses the microphone. Optional
+ * online lyric translation is handled outside this WebView by the native layer.
  */
 // The bridge methods are all annotated with @JavascriptInterface (lint cannot
 // see through the private Kotlin bridge class) and the WebView only ever loads
@@ -94,6 +99,7 @@ fun SoundFieldScreen(
     durationMs: Long,
     audioVisualLevel: AudioVisualLevel,
     frameRate: LyricFrameRate,
+    translationMode: LyricTranslationMode,
     coverAccent: Color,
     onCloseLyrics: () -> Unit,
     onToggle: () -> Unit,
@@ -111,15 +117,30 @@ fun SoundFieldScreen(
     val currentPlayer = rememberUpdatedState(player)
     val appContext = context.applicationContext
 
-    var pageReady by remember { mutableStateOf(false) }
-    val holder = remember { SoundFieldWebHolder() }
-    val jsBridge = remember { SoundFieldBridge(Handler(Looper.getMainLooper())) }
+    val cacheEntry = remember(appContext, audioVisualLevel.key) {
+        SoundFieldWebCache.obtain(
+            context = appContext,
+            quality = audioVisualLevel.key,
+            fpsKey = frameRate.key
+        )
+    }
+    var pageReady by remember(cacheEntry) { mutableStateOf(cacheEntry.ready) }
+    val jsBridge = cacheEntry.bridge
 
     fun evaluateJavascript(script: String) {
         if (!pageReady) return
-        val webView = holder.webView ?: return
-        runCatching { webView.evaluateJavascript(script, null) }
+        runCatching { cacheEntry.webView.evaluateJavascript(script, null) }
             .onFailure { Log.w(TAG, "evaluateJavascript failed", it) }
+    }
+
+    // The WebView is cached by quality; frame-rate changes are applied live to
+    // the existing page instead of destroying it and recompiling the shaders.
+    LaunchedEffect(pageReady, frameRate) {
+        if (!pageReady) return@LaunchedEffect
+        evaluateJavascript(
+            "window.CatField&&window.CatField.setFrameRate&&" +
+                "window.CatField.setFrameRate(${JSONObject.quote(frameRate.key)})"
+        )
     }
 
     val sensorHandler = remember { Handler(Looper.getMainLooper()) }
@@ -149,9 +170,8 @@ fun SoundFieldScreen(
                 val roll = orientation[2].toDouble()
                 sensorHandler.post {
                     if (!gyroEnabledState.value) return@post
-                    val webView = holder.webView ?: return@post
                     runCatching {
-                        webView.evaluateJavascript(
+                        cacheEntry.webView.evaluateJavascript(
                             "window.catmusic&&window.catmusic.orientation({p:$pitch,r:$roll})",
                             null
                         )
@@ -185,16 +205,48 @@ fun SoundFieldScreen(
     val safeLeft = insets.getLeft(density, layoutDirection) / density.density
     val safeRight = insets.getRight(density, layoutDirection) / density.density
 
+    // A WebView that is merely covered by another Activity can keep a WebGL
+    // context alive. Pause the cached field together with the lifecycle so it
+    // does not burn GPU while CatMusic is in the background.
+    DisposableEffect(lifecycleOwner, cacheEntry) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    cacheEntry.webView.onResume()
+                    runCatching {
+                        cacheEntry.webView.evaluateJavascript(
+                            "window.CatField&&window.CatField.setVisible(true)",
+                            null
+                        )
+                    }
+                }
+
+                Lifecycle.Event.ON_PAUSE -> {
+                    runCatching {
+                        cacheEntry.webView.evaluateJavascript(
+                            "window.CatField&&window.CatField.setVisible(false)",
+                            null
+                        )
+                    }
+                    cacheEntry.webView.onPause()
+                }
+
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     // Let the page dismiss its menu or calibration panel before leaving the
     // lyric stage, so Android back behaves like the in-page Escape handler.
     BackHandler {
-        val webView = holder.webView
-        if (!pageReady || webView == null) {
+        if (!pageReady) {
             onCloseLyrics()
             return@BackHandler
         }
         runCatching {
-            webView.evaluateJavascript(
+            cacheEntry.webView.evaluateJavascript(
                 "(function(){try{return !!(window.catmusic&&window.catmusic.back&&window.catmusic.back());}" +
                     "catch(e){return false;}})()"
             ) { result ->
@@ -204,7 +256,11 @@ fun SoundFieldScreen(
     }
 
     SideEffect {
-        jsBridge.onReady = { pageReady = true }
+        cacheEntry.readyListener = { pageReady = true }
+        // The cached page may already have finished loading before this side
+        // effect runs. Re-check the flag so its one-shot ready callback cannot
+        // be missed and trigger the timeout fallback.
+        if (cacheEntry.ready) pageReady = true
         jsBridge.onClose = onCloseLyrics
         jsBridge.onToggle = onToggle
         jsBridge.onSeek = { positionMs -> onSeek(positionMs.coerceAtLeast(0L)) }
@@ -223,7 +279,14 @@ fun SoundFieldScreen(
         }
     }
 
-    var lyricsState by remember(track?.id, track?.lyricsFile) {
+    DisposableEffect(cacheEntry) {
+        if (cacheEntry.ready) pageReady = true
+        onDispose {
+            if (cacheEntry.readyListener != null) cacheEntry.readyListener = null
+        }
+    }
+
+    var lyricsState by remember(track?.id, track?.lyricsFile, translationMode) {
         mutableStateOf<SoundFieldState>(
             if (track?.lyricsFile.isNullOrBlank()) {
                 SoundFieldState.Ready(MISSING_LYRICS_JSON)
@@ -233,25 +296,26 @@ fun SoundFieldScreen(
         )
     }
 
-    LaunchedEffect(track?.id, track?.lyricsFile) {
-        val key = track?.lyricsFile
-        if (key.isNullOrBlank()) {
+    LaunchedEffect(track?.id, track?.lyricsFile, translationMode) {
+        if (track?.lyricsFile.isNullOrBlank()) {
             lyricsState = SoundFieldState.Ready(MISSING_LYRICS_JSON)
             return@LaunchedEffect
         }
         lyricsState = SoundFieldState.Loading
-        val json = withContext(Dispatchers.IO) {
-            val file = File(context.filesDir, "lyrics/$key")
-            if (!file.exists()) return@withContext MISSING_LYRICS_JSON
-            runCatching {
-                val parsed = LrcParser.parse(file.readText())
-                if (parsed.lines.isEmpty()) MISSING_LYRICS_JSON else lyricsJson(parsed)
-            }.getOrElse {
-                Log.w(TAG, "Unable to read lyrics for the sound field stage", it)
-                MISSING_LYRICS_JSON
+        val base = LyricDisplayLoader.load(context, track, translationMode)
+        if (base == null || base.lines.isEmpty()) {
+            lyricsState = SoundFieldState.Ready(MISSING_LYRICS_JSON)
+            return@LaunchedEffect
+        }
+        // Send local lyrics right away so switching into the stage never waits
+        // for a translation request.
+        lyricsState = SoundFieldState.Ready(lyricsJson(base))
+        if (translationMode == LyricTranslationMode.ONLINE) {
+            val enriched = LyricDisplayLoader.enrich(context, track, base)
+            if (enriched !== base) {
+                lyricsState = SoundFieldState.Ready(lyricsJson(enriched))
             }
         }
-        lyricsState = SoundFieldState.Ready(json)
     }
 
     LaunchedEffect(pageReady, lyricsState) {
@@ -311,11 +375,6 @@ fun SoundFieldScreen(
             .put("offset", lyricOffsetMs)
             .toString()
         evaluateJavascript("window.catmusic&&window.catmusic.playback($json)")
-        // Safety net in addition to the 20 Hz audio loop: playback updates
-        // also carry the latest energy, so the field never stays frozen if
-        // a dedicated audio tick is delayed.
-        val energyJson = audioJson(freshAudioEnergy(), player.isPlaying)
-        evaluateJavascript("window.catmusic&&window.catmusic.audio($energyJson)")
     }
 
     LaunchedEffect(pageReady, safeTop, safeBottom, safeLeft, safeRight) {
@@ -372,82 +431,15 @@ fun SoundFieldScreen(
     ) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
-            factory = { viewContext ->
-                WebView(viewContext).apply {
-                    setBackgroundColor(AndroidColor.BLACK)
-                    overScrollMode = View.OVER_SCROLL_NEVER
-                    isVerticalScrollBarEnabled = false
-                    isHorizontalScrollBarEnabled = false
-
-                    @Suppress("DEPRECATION")
-                    settings.apply {
-                        javaScriptEnabled = true
-                        domStorageEnabled = true
-                        allowFileAccess = true
-                        // The page and its script/style live side by side in
-                        // assets. Enabling same-scheme file reads keeps that
-                        // loading path reliable across WebView versions; the
-                        // content is first-party and network loads are blocked.
-                        allowFileAccessFromFileURLs = true
-                        allowUniversalAccessFromFileURLs = false
-                        allowContentAccess = false
-                        cacheMode = WebSettings.LOAD_NO_CACHE
-                        mediaPlaybackRequiresUserGesture = false
-                        setSupportZoom(false)
-                        builtInZoomControls = false
-                        displayZoomControls = false
-                        javaScriptCanOpenWindowsAutomatically = false
-                        setGeolocationEnabled(false)
-                        mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                        blockNetworkLoads = true
-                        textZoom = 100
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            @Suppress("DEPRECATION")
-                            forceDark = WebSettings.FORCE_DARK_OFF
-                        }
-                    }
-
-                    webViewClient = object : WebViewClient() {
-                        override fun onPageStarted(
-                            view: WebView?,
-                            url: String?,
-                            favicon: Bitmap?
-                        ) {
-                            super.onPageStarted(view, url, favicon)
-                            pageReady = false
-                        }
-
-                        override fun shouldOverrideUrlLoading(
-                            view: WebView?,
-                            request: WebResourceRequest?
-                        ): Boolean = true
-                    }
-
-                    webChromeClient = object : WebChromeClient() {
-                        override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
-                            consoleMessage?.let {
-                                Log.d(TAG, "${it.message()} (${it.sourceId()}:${it.lineNumber()})")
-                            }
-                            return true
-                        }
-                    }
-
-                    addJavascriptInterface(jsBridge, JS_BRIDGE_NAME)
-                    holder.webView = this
-                    if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
-                    loadUrl(
-                        "file:///android_asset/soundfield/index.html" +
-                            "?quality=${audioVisualLevel.key}&fps=${frameRate.key}"
-                    )
+            factory = { _ ->
+                cacheEntry.webView.also { view ->
+                    (view.parent as? ViewGroup)?.removeView(view)
+                    SoundFieldWebCache.activate(view)
                 }
             },
             update = { },
-            onRelease = { webView ->
-                holder.webView = null
-                (webView.parent as? ViewGroup)?.removeView(webView)
-                webView.stopLoading()
-                webView.loadUrl("about:blank")
-                webView.destroy()
+            onRelease = { view ->
+                SoundFieldWebCache.release(cacheEntry, view)
             }
         )
     }
@@ -458,8 +450,153 @@ private sealed interface SoundFieldState {
     data class Ready(val json: String) : SoundFieldState
 }
 
-private class SoundFieldWebHolder {
-    var webView: WebView? = null
+private class SoundFieldWebEntry(
+    val key: String,
+    val quality: String,
+    val fpsKey: String,
+    val webView: WebView,
+    val bridge: SoundFieldBridge
+) {
+    @Volatile
+    var ready: Boolean = false
+    var readyListener: (() -> Unit)? = null
+}
+
+/**
+ * Keeps the expensive WebGL page alive across lyric-sheet open/close cycles.
+ * The page is paused and the field render loop is stopped while detached; the
+ * next open reuses its shader programs, textures and lyric DOM instead of
+ * compiling a fresh WebView from scratch. Frame-rate changes are pushed into
+ * the live page, so the cache is keyed only by render quality.
+ */
+// The cached WebView deliberately uses the application context and outlives a
+// single lyric-sheet composition. It is destroyed when the quality changes, so
+// this is a bounded cache rather than a leaked Activity view.
+@SuppressLint("SetJavaScriptEnabled", "JavascriptInterface", "StaticFieldLeak")
+private object SoundFieldWebCache {
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var current: SoundFieldWebEntry? = null
+
+    fun obtain(context: Context, quality: String, fpsKey: String): SoundFieldWebEntry {
+        val key = quality
+        val existing = current
+        if (existing != null && existing.key == key) return existing
+        if (existing != null) {
+            runCatching { (existing.webView.parent as? ViewGroup)?.removeView(existing.webView) }
+            destroy(existing.webView)
+            current = null
+        }
+
+        val appContext = context.applicationContext
+        val webView = WebView(appContext).apply {
+            setBackgroundColor(AndroidColor.BLACK)
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
+
+            @Suppress("DEPRECATION")
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                allowFileAccess = true
+                allowFileAccessFromFileURLs = true
+                allowUniversalAccessFromFileURLs = false
+                allowContentAccess = false
+                cacheMode = WebSettings.LOAD_NO_CACHE
+                mediaPlaybackRequiresUserGesture = false
+                setSupportZoom(false)
+                builtInZoomControls = false
+                displayZoomControls = false
+                javaScriptCanOpenWindowsAutomatically = false
+                setGeolocationEnabled(false)
+                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                blockNetworkLoads = true
+                textZoom = 100
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    @Suppress("DEPRECATION")
+                    forceDark = WebSettings.FORCE_DARK_OFF
+                }
+            }
+
+            webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(
+                    view: WebView?,
+                    request: WebResourceRequest?
+                ): Boolean = true
+            }
+
+            webChromeClient = object : WebChromeClient() {
+                override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                    consoleMessage?.let {
+                        Log.d(TAG, "${it.message()} (${it.sourceId()}:${it.lineNumber()})")
+                    }
+                    return true
+                }
+            }
+        }
+
+        val bridge = SoundFieldBridge(mainHandler)
+        val entry = SoundFieldWebEntry(key, quality, fpsKey, webView, bridge)
+        bridge.onReady = {
+            entry.ready = true
+            entry.readyListener?.invoke()
+        }
+        webView.addJavascriptInterface(bridge, JS_BRIDGE_NAME)
+        current = entry
+        if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
+        webView.loadUrl(
+            "file:///android_asset/soundfield/index.html" +
+                "?quality=$quality&fps=$fpsKey"
+        )
+        return entry
+    }
+
+    fun activate(view: WebView) {
+        view.visibility = View.VISIBLE
+        view.onResume()
+        runCatching {
+            view.evaluateJavascript(
+                "window.CatField&&window.CatField.setVisible(true)",
+                null
+            )
+        }
+    }
+
+    fun release(entry: SoundFieldWebEntry, view: WebView) {
+        if (entry !== current) {
+            runCatching { (view.parent as? ViewGroup)?.removeView(view) }
+            return
+        }
+        runCatching {
+            view.evaluateJavascript(
+                "(function(){try{" +
+                    "while(window.catmusic&&window.catmusic.back&&window.catmusic.back()){}" +
+                    "if(window.CatField&&window.CatField.setVisible)" +
+                    "window.CatField.setVisible(false);" +
+                    "}catch(e){}})();",
+                null
+            )
+        }
+        view.onPause()
+        runCatching { (view.parent as? ViewGroup)?.removeView(view) }
+        entry.readyListener = null
+        entry.bridge.onClose = {}
+        entry.bridge.onToggle = {}
+        entry.bridge.onSeek = {}
+        entry.bridge.onOffset = {}
+        entry.bridge.onImportLyrics = {}
+        entry.bridge.onToggleAudioMode = {}
+        entry.bridge.onGyroToggle = {}
+    }
+
+    private fun destroy(view: WebView) {
+        runCatching {
+            view.removeJavascriptInterface(JS_BRIDGE_NAME)
+            view.stopLoading()
+            view.loadUrl("about:blank")
+            view.destroy()
+        }
+    }
 }
 
 class SoundFieldBridge(

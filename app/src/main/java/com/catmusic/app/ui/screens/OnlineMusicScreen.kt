@@ -20,7 +20,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -32,6 +34,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.catmusic.app.BuildConfig
 import com.catmusic.app.online.MusicBridge
+import com.catmusic.app.online.OnlineAudioBus
+import kotlinx.coroutines.flow.collect
 
 /**
  * Full MusicDL online experience, running from bundled local assets inside
@@ -41,18 +45,22 @@ import com.catmusic.app.online.MusicBridge
 @Composable
 fun OnlineMusicScreen(
     modifier: Modifier = Modifier,
+    active: Boolean = true,
     onExit: () -> Unit,
     onOnlinePlaybackStarted: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val activeState = rememberUpdatedState(active)
     var webView by remember { mutableStateOf<WebView?>(null) }
     var bridge by remember { mutableStateOf<MusicBridge?>(null) }
 
     DisposableEffect(Unit) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> webView?.onResume()
+                Lifecycle.Event.ON_RESUME -> {
+                    if (activeState.value) webView?.onResume()
+                }
                 Lifecycle.Event.ON_PAUSE -> webView?.onPause()
                 else -> Unit
             }
@@ -76,7 +84,32 @@ fun OnlineMusicScreen(
         }
     }
 
-    BackHandler {
+    // The page is kept alive after the first visit so returning to 在线 does
+    // not rebuild the whole MusicDL WebView. Leaving the tab only hides the
+    // view: the page stays resumed so an online song continues through the
+    // Library and Settings tabs. Local playback sends an explicit pause
+    // request through OnlineAudioBus, so the two players never overlap.
+    LaunchedEffect(active, webView) {
+        val current = webView ?: return@LaunchedEffect
+        if (active) {
+            current.visibility = View.VISIBLE
+            current.onResume()
+        } else {
+            current.visibility = View.INVISIBLE
+        }
+    }
+
+    // Local Media3 playback always wins. This catches play/resume actions from
+    // the library, playlists, headset or media notification while the user is
+    // away from the Online tab.
+    LaunchedEffect(webView) {
+        val current = webView ?: return@LaunchedEffect
+        OnlineAudioBus.pauseRequests.collect {
+            current.evaluateJavascript(PAUSE_ONLINE_MEDIA_JS, null)
+        }
+    }
+
+    BackHandler(enabled = active) {
         val current = webView
         if (current == null) {
             onExit()
@@ -106,6 +139,9 @@ fun OnlineMusicScreen(
                     },
                     onOnlinePlaybackStarted = onOnlinePlaybackStarted
                 )
+            },
+            update = { view ->
+                view.visibility = if (active) View.VISIBLE else View.INVISIBLE
             }
         )
     }
@@ -184,6 +220,10 @@ private fun createOnlineWebView(
     onCreated(webView, bridge)
     return webView
 }
+
+private const val PAUSE_ONLINE_MEDIA_JS =
+    "(function(){try{document.querySelectorAll('audio,video').forEach(function(el){" +
+        "try{el.pause();}catch(e){}});}catch(e){}})();"
 
 private fun openExternally(context: Context, url: String): Boolean {
     // The bundled page handles its own relative assets; any web navigation is

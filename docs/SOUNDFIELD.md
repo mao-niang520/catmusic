@@ -1,7 +1,7 @@
 # CatMusic sound field
 
-The 1.27.0 sound field is CatMusic's own full-screen lyric stage. It replaces
-the earlier experimental scene with an implementation that is entirely
+The current (1.34.5) sound field is CatMusic's own full-screen lyric stage. It
+replaces the earlier experimental scene with an implementation that is entirely
 contained in this repository.
 
 ## Files
@@ -22,12 +22,16 @@ page to Media3 and the local repository.
 
 ### Star Tide (星潮)
 
-- 10,000 point sprites: 100 meridians × 100 rings.
+- Roughly 10,000 base point sprites arranged in evenly spaced latitude rows.
+  The immersive tier uses 64 rows and a circumference-proportional point count;
+  all base points share the same size and shade. There are no enlarged glints
+  or floating highlight dots.
 - Each point takes its colour from a 64×64 centre-cropped preview of the
   current album artwork. The UV mapping is non-mirrored: at the front view the
   cover's left side appears on the left of the screen.
-- Static interleaved buffer: position, cover colour, random seed, point size
-  and glint kind. Per-frame work is limited to uniforms.
+- Static interleaved buffer: position, cover colour, per-point seed, size and
+  a reserved kind slot. Every particle currently uses the base kind; per-frame
+  work is limited to uniforms.
 - Eight decoded bands and a smoothed level breathe the shell. A spring-like
   beat envelope pushes points outward into a hollow cloud and pulls them back.
 - The camera is a simple WebGL point-sprite projection; horizontal dragging
@@ -76,12 +80,18 @@ palette from the deterministic accent supplied by the app instead.
 
 - The active line is found by binary search over `position - offset`. Positive
   offsets delay the lyrics; tapping a line seeks to `line.t + offset`.
+- Vertical dragging on a timed lyric enters a seek preview: up selects a later
+  line, down an earlier one. A small HUD shows the target `m:ss`; releasing
+  keeps the preview and a tap commits. Three seconds without a tap returns to
+  the live line. Holding a finger down pauses the countdown.
+- The HUD lives outside the masked lyrics stage so the top/bottom fade does not
+  clip it. The native Compose lyric page mirrors the same drag/tap contract.
 - The visible row count is adjustable from 3 to 10 and the font size is
   recalculated from the actual lyric-stage height.
 - The active line and its translation ride a short PCM beat envelope; the
   whole lyric plane receives a very small gyro-driven tilt so it stays
   readable while the field moves.
-- Dragging starts only outside interactive UI (menu, transport, buttons,
+- Dragging the field starts outside interactive UI (menu, transport, buttons,
   lyric lines). The renderer keeps one pointer table and supports two-finger
   scaling. The page stops its animation loop when hidden.
 - Android back first closes the in-page menu or calibration panel. Only a
@@ -93,7 +103,7 @@ palette from the deterministic accent supplied by the app instead.
 |---|---|
 | Quality | `light`, `balanced`, `immersive` (default), `ultra` |
 | Internal DPR cap | 1.6×, 1.8×, 2.25×, 2.5× |
-| Star Tide meridians | 60, 80, 100, 100 (rings × 100) |
+| Star Tide rows × base points | 48×176, 56×190, 64×200, 72×200 |
 | Frame rate | 30 / 45 / 60 / 90 / 120 / unlimited |
 | Lyric rows | 3–10 |
 | Beat strength | 0–100% |

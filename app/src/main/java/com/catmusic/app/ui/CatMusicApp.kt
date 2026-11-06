@@ -4,9 +4,13 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,10 +37,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -50,6 +54,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -62,6 +67,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -70,15 +77,21 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.catmusic.app.data.AdaptiveMotion
 import com.catmusic.app.data.HomeBackgroundStore
+import com.catmusic.app.data.HomeBackgroundStyle
 import com.catmusic.app.data.ImportState
 import com.catmusic.app.data.Track
+import com.catmusic.app.online.OnlineAudioBus
 import com.catmusic.app.ui.components.AppTab
 import com.catmusic.app.ui.components.CatBottomBar
 import com.catmusic.app.ui.components.GlassBackdrop
 import com.catmusic.app.ui.components.GlassBackdropView
+import com.catmusic.app.ui.components.LocalAdaptiveMotionNanos
+import com.catmusic.app.ui.components.LocalMotionFrameRate
 import com.catmusic.app.ui.components.MiniPlayer
 import com.catmusic.app.ui.components.coverPalette
+import com.catmusic.app.ui.components.rememberAdaptiveMotionNanos
 import com.catmusic.app.ui.components.rememberPlayerUiSnapshot
 import com.catmusic.app.ui.screens.ImportBottomSheet
 import com.catmusic.app.ui.screens.ImportOverlay
@@ -96,6 +109,7 @@ import com.catmusic.app.ui.theme.CatDanger
 import com.catmusic.app.ui.theme.CatTextPrimary
 import com.catmusic.app.ui.theme.CatTextSecondary
 import com.catmusic.app.ui.theme.CatViolet
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -111,6 +125,11 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
     val audioReactiveEnabled by viewModel.audioReactiveEnabled.collectAsStateWithLifecycle()
     val audioVisualLevel by viewModel.audioVisualLevel.collectAsStateWithLifecycle()
     val lyricFrameRate by viewModel.lyricFrameRate.collectAsStateWithLifecycle()
+    val lyricTranslationMode by viewModel.lyricTranslationMode.collectAsStateWithLifecycle()
+    val fadeInMs by viewModel.fadeInMs.collectAsStateWithLifecycle()
+    val fadeOutMs by viewModel.fadeOutMs.collectAsStateWithLifecycle()
+    val desktopLyricsEnabled by viewModel.desktopLyricsEnabled.collectAsStateWithLifecycle()
+    val libraryLayoutStyle by viewModel.libraryLayoutStyle.collectAsStateWithLifecycle()
     val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsStateWithLifecycle()
     val player = rememberPlayerUiSnapshot(controller)
 
@@ -124,6 +143,7 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
     val snackbarScope = rememberCoroutineScope()
 
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.Library) }
+    var onlineTabOpened by rememberSaveable { mutableStateOf(false) }
     var playerOpen by rememberSaveable { mutableStateOf(false) }
     var showImportSheet by rememberSaveable { mutableStateOf(false) }
     var artworkTargetId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -142,6 +162,49 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { }
+
+    val overlayPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (Settings.canDrawOverlays(context)) {
+            viewModel.setDesktopLyricsEnabled(true)
+            Toast.makeText(
+                context,
+                "桌面歌词已开启，退出 CatMusic 后显示",
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            Toast.makeText(
+                context,
+                "需要允许 CatMusic 显示在其他应用上层",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+    val toggleDesktopLyrics: () -> Unit = {
+        if (desktopLyricsEnabled) {
+            viewModel.setDesktopLyricsEnabled(false)
+        } else if (Settings.canDrawOverlays(context)) {
+            viewModel.setDesktopLyricsEnabled(true)
+            Toast.makeText(
+                context,
+                "桌面歌词已开启，退出 CatMusic 后显示",
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:${context.packageName}")
+            )
+            runCatching { overlayPermissionLauncher.launch(intent) }.onFailure {
+                Toast.makeText(
+                    context,
+                    "当前系统无法打开悬浮窗权限设置",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
 
     val openFilesLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
@@ -210,6 +273,19 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
         Unit
     }
 
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == AppTab.Online) onlineTabOpened = true
+    }
+
+    // Online previews now survive tab changes. If the user starts local
+    // playback from the library, a playlist, a headset or the media
+    // notification, explicitly stop the online page so both never sound at
+    // once. The online page itself still asks local playback to pause when a
+    // preview starts (the opposite direction).
+    LaunchedEffect(player.isPlaying) {
+        if (player.isPlaying) OnlineAudioBus.requestPause()
+    }
+
     LaunchedEffect(playerOpen, forcedLandscape) {
         if (!playerOpen && forcedLandscape) {
             forcedLandscape = false
@@ -227,6 +303,23 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
         ) {
             notificationPermissionRequested = true
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // Ask once on entry, not only when the first song starts. This is what lets
+    // Vivo OriginOS (and other Android 13+ skins) surface CatMusic's media
+    // session in the notification shade / Dynamic Island from the very first
+    // playback. The short delay gives the launch transition time to settle so
+    // the system dialog does not fight the splash screen.
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            delay(1_100L)
+            requestNotificationPermission()
         }
     }
 
@@ -280,7 +373,20 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
     ) {
         val backdrop = GlassBackdrop.current() as? GlassBackdropView ?: return@LaunchedEffect
         val track = currentTrack
-        if (track != null) {
+        // Always synchronise the selected preset into the native scene. The
+        // previous logic applied only a cover while a track was playing and
+        // never cleared the old METABALL style, so switching away from
+        // 熔岩流体 appeared to do nothing.
+        val styleNeedsSync = !backdrop.matchesHome(
+            homeBackgroundStyle,
+            customHomeBackgroundFile
+        )
+        if (styleNeedsSync) {
+            backdrop.setHome(homeBackgroundStyle, customHomeBackgroundFile)
+        }
+        // The MetaBall scene is an always-on background: unlike the other
+        // presets it is not replaced by album colours while music is playing.
+        if (track != null && homeBackgroundStyle != HomeBackgroundStyle.METABALL) {
             val artwork = track.artworkFile
                 ?.let { name -> File(context.filesDir, "artwork/$name") }
                 ?.takeIf { it.exists() }
@@ -293,7 +399,9 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
                     coverPalette(track.id).map { it.toArgb() }.toIntArray()
                 )
             }
-        } else {
+        } else if (!styleNeedsSync) {
+            // Keep the normal no-track / METABALL path (and clear a cover left
+            // over from the previous song) when the preset has not changed.
             backdrop.setHome(homeBackgroundStyle, customHomeBackgroundFile)
         }
     }
@@ -365,10 +473,33 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
 
     val importActive = importState is ImportState.Scanning || importState is ImportState.Importing
 
+    val motionNanos = rememberAdaptiveMotionNanos(lyricFrameRate, player.isPlaying)
+    LaunchedEffect(Unit) { AdaptiveMotion.pulse() }
+    LaunchedEffect(player.isPlaying, currentTrack?.id) { AdaptiveMotion.pulse() }
+    LaunchedEffect(lyricFrameRate, player.isPlaying) {
+        (GlassBackdrop.current() as? GlassBackdropView)
+            ?.setMotionProfile(lyricFrameRate, player.isPlaying)
+    }
+
     BackHandler(enabled = playerOpen) { playerOpen = false }
     BackHandler(enabled = importActive) { viewModel.cancelImport() }
 
-    Box(Modifier.fillMaxSize()) {
+    CompositionLocalProvider(
+        LocalAdaptiveMotionNanos provides motionNanos,
+        LocalMotionFrameRate provides lyricFrameRate
+    ) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent(PointerEventPass.Initial)
+                        AdaptiveMotion.pulse()
+                    }
+                }
+            }
+    ) {
         Scaffold(
             // The player paints over this area with its own transparent scene.
             // Fading the whole main chrome out (rather than covering it with
@@ -426,6 +557,7 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
                                     // online preview actually starts, so
                                     // browsing the shop is silent and the two
                                     // players still never overlap.
+                                    if (tab == AppTab.Online) onlineTabOpened = true
                                     selectedTab = tab
                                 }
                             )
@@ -438,6 +570,11 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(bottom = innerPadding.calculateBottomPadding())
+                    // Keep only horizontal safe-drawing padding. Reserving the
+                    // full top cutout here made the home page look like it had
+                    // a large black "forehead" above the header. The status bar
+                    // is hidden, so the content can use the edge-to-edge space;
+                    // the header already keeps its controls near the sides.
                     .windowInsetsPadding(
                         WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
                     ),
@@ -467,6 +604,8 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
                             tracks = tracks,
                             statsFlow = viewModel.stats,
                             player = player,
+                            layoutStyle = libraryLayoutStyle,
+                            onChangeLayoutStyle = viewModel::setLibraryLayoutStyle,
                             onTrackAction = onTrackAction,
                             onShowImport = { showImportSheet = true },
                             onDeleteTrack = { pendingDeleteTrack = it },
@@ -474,10 +613,7 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
                             onAddToPlaylist = { addToPlaylistTrackId = it.id }
                         )
 
-                        AppTab.Online -> OnlineMusicScreen(
-                            onExit = { selectedTab = AppTab.Library },
-                            onOnlinePlaybackStarted = viewModel::pausePlayback
-                        )
+                        AppTab.Online -> Box(Modifier.fillMaxSize())
 
                         AppTab.Playlists -> PlaylistsScreen(
                             playlists = playlists,
@@ -521,11 +657,46 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
                             onSelectAudioVisualLevel = viewModel::setAudioVisualLevel,
                             lyricFrameRate = lyricFrameRate,
                             onSelectLyricFrameRate = viewModel::setLyricFrameRate,
+                            lyricTranslationMode = lyricTranslationMode,
+                            onSelectLyricTranslationMode = viewModel::setLyricTranslationMode,
+                            desktopLyricsEnabled = desktopLyricsEnabled,
+                            onToggleDesktopLyrics = viewModel::setDesktopLyricsEnabled,
                             onPickMixed = { openMixedFilesLauncher.launch(arrayOf("*/*")) },
                             onPickFiles = { openFilesLauncher.launch(arrayOf("audio/*")) },
                             onPickFolder = { openFolderLauncher.launch(null) },
                             onClearLibrary = viewModel::clearLibrary,
                             onResetStats = viewModel::resetStatistics
+                        )
+                    }
+                }
+
+                // Keep the MusicDL WebView mounted after the first visit and
+                // simply park it at zero height when another tab is active.
+                // The page, search history and resolved result list survive, so
+                // returning to 在线 is instant instead of rebuilding the whole
+                // WebView. The WebView itself is paused and its audio stopped
+                // while parked.
+                if (onlineTabOpened) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .widthIn(max = 900.dp)
+                            .fillMaxWidth()
+                            .fillMaxHeight()
+                            // Park the full-size WebView outside the viewport
+                            // rather than measuring it at zero height. Its
+                            // viewport therefore stays stable across tab
+                            // switches; hiding is handled by the screen's
+                            // active flag (visibility + onPause).
+                            .offset(
+                                y = if (selectedTab == AppTab.Online) 0.dp else 3000.dp
+                            )
+                    ) {
+                        OnlineMusicScreen(
+                            modifier = Modifier.fillMaxSize(),
+                            active = selectedTab == AppTab.Online,
+                            onExit = { selectedTab = AppTab.Library },
+                            onOnlinePlaybackStarted = viewModel::pausePlayback
                         )
                     }
                 }
@@ -567,6 +738,13 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
                     onToggleAudioReactive = toggleAudioReactive,
                     audioVisualLevel = audioVisualLevel,
                     lyricFrameRate = lyricFrameRate,
+                    translationMode = lyricTranslationMode,
+                    fadeInMs = fadeInMs,
+                    fadeOutMs = fadeOutMs,
+                    onFadeInChange = viewModel::setFadeInMs,
+                    onFadeOutChange = viewModel::setFadeOutMs,
+                    desktopLyricsEnabled = desktopLyricsEnabled,
+                    onToggleDesktopLyrics = toggleDesktopLyrics,
                     sleepTimerRemainingMs = sleepTimerRemainingMs,
                     onSetSleepTimer = viewModel::setSleepTimer,
                     onClearSleepTimer = viewModel::clearSleepTimer
@@ -682,7 +860,11 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
             hostState = snackbarHostState,
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .statusBarsPadding()
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(
+                        WindowInsetsSides.Top + WindowInsetsSides.Horizontal
+                    )
+                )
                 .padding(horizontal = 20.dp, vertical = 8.dp)
         ) { data ->
             Snackbar(
@@ -694,6 +876,7 @@ fun CatMusicApp(viewModel: CatMusicViewModel = viewModel()) {
                 actionContentColor = CatViolet
             )
         }
+    }
     }
 }
 

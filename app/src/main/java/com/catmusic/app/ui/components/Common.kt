@@ -1,11 +1,6 @@
 package com.catmusic.app.ui.components
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -140,9 +135,10 @@ fun LiquidGlassSurface(
         RealLiquidGlassLayer(
             modifier = Modifier.matchParentSize(),
             cornerRadiusPx = cornerPx,
-            refractionHeight = 60.dp,
-            bevelWidth = 28.dp,
-            dispersion = 0.20f,
+            refractionHeight = 82.dp,
+            bevelWidth = 38.dp,
+            dispersion = 0.32f,
+            saturation = 155f,
             tintArgb = tint.toArgb(),
             sensorSpecular = sensorSpecular,
             // Always the clear iOS-style material. The regular variant adds an
@@ -277,18 +273,11 @@ fun AppLogo(modifier: Modifier = Modifier, size: Dp = 48.dp) {
 
 @Composable
 fun CatMascot(modifier: Modifier = Modifier) {
-    val transition = rememberInfiniteTransition(label = "mascot")
-    val orbit by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(24_000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "orbit"
-    )
+    val motionNanos = LocalAdaptiveMotionNanos.current
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
+            val seconds = motionNanos.value / 1_000_000_000f
+            val orbit = (seconds / 24f % 1f) * 360f
             val radius = size.minDimension * 0.38f
             drawCircle(
                 brush = Brush.radialGradient(
@@ -436,22 +425,15 @@ fun EqualizerBars(
     color: Color = CatPeach,
     barCount: Int = 3
 ) {
-    val transition = rememberInfiniteTransition(label = "equalizer")
-    val phase by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1_100, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "wave"
-    )
+    val motionNanos = LocalAdaptiveMotionNanos.current
     val activeAlpha by animateFloatAsState(
         targetValue = if (active) 1f else 0.32f,
         animationSpec = tween(380),
         label = "activeAlpha"
     )
     Canvas(modifier) {
+        val seconds = motionNanos.value / 1_000_000_000f
+        val phase = (seconds / 1.1f) % 1f
         val gap = size.width * 0.16f
         val barWidth = (size.width - gap * (barCount - 1)) / barCount
         repeat(barCount) { index ->

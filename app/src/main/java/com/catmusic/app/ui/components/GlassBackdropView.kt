@@ -9,17 +9,22 @@ import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.util.AttributeSet
 import android.view.Choreographer
 import android.view.View
+import com.catmusic.app.data.AdaptiveMotion
 import com.catmusic.app.data.HomeBackgroundStyle
+import com.catmusic.app.data.LyricFrameRate
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
 import kotlin.random.Random
 
@@ -51,10 +56,26 @@ class GlassBackdropView @JvmOverloads constructor(
     private data class Scene(
         val bitmap: Bitmap,
         val colors: IntArray,
-        val motes: FloatArray
+        val motes: FloatArray,
+        val hazeLive: Boolean = false
     )
 
-    private var style: HomeBackgroundStyle = HomeBackgroundStyle.AURORA
+    /** One broad colour mass in the hazy-fluid home scene. */
+    private data class HazeField(
+        val x: Float,
+        val y: Float,
+        val radius: Float,
+        val stretch: Float,
+        val rotation: Float,
+        val color: Int,
+        val alpha: Float,
+        val driftX: Float,
+        val driftY: Float,
+        val phase: Float
+    )
+
+    private var style: HomeBackgroundStyle = HomeBackgroundStyle.METABALL
+    private val metaballRenderer = MetaballCanvasRenderer()
     private var customFile: File? = null
     private var coverFile: File? = null
     private var albumColors: IntArray? = null
@@ -68,21 +89,44 @@ class GlassBackdropView @JvmOverloads constructor(
     private var highlightShader: Shader? = null
     private var frameSeconds = 0f
     private var lastFrameNanos = 0L
-    private var lastRenderNanos = 0L
+    private var nextFrameNanos = 0L
     private var animating = false
     private val choreographer = Choreographer.getInstance()
+
+    @Volatile
+    private var motionRate = LyricFrameRate.ADAPTIVE
+
+    @Volatile
+    private var motionPlaying = false
 
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (!animating) return
-            // Ambient motion is capped at 60 fps even on 120 Hz panels; the
-            // lens can still capture every display frame, but the scene does
-            // not need to be rebuilt twice as often.
-            if (lastRenderNanos != 0L &&
-                frameTimeNanos - lastRenderNanos < 15_500_000L
-            ) {
-                choreographer.postFrameCallback(this)
-                return
+            val targetFps = AdaptiveMotion.targetFps(motionRate, motionPlaying)
+            val intervalNanos = if (targetFps > 0) {
+                1_000_000_000L / targetFps
+            } else {
+                0L
+            }
+            if (intervalNanos > 0L) {
+                if (nextFrameNanos == 0L) nextFrameNanos = frameTimeNanos
+                // A fresh interaction can tighten the budget while an old
+                // deadline is still far away.
+                if (nextFrameNanos - frameTimeNanos > intervalNanos * 2) {
+                    nextFrameNanos = frameTimeNanos + intervalNanos
+                }
+                if (frameTimeNanos < nextFrameNanos) {
+                    val delayMs = ((nextFrameNanos - frameTimeNanos) / 1_000_000L)
+                        .coerceAtLeast(1L)
+                    choreographer.postFrameCallbackDelayed(this, delayMs)
+                    return
+                }
+                nextFrameNanos += intervalNanos
+                if (nextFrameNanos <= frameTimeNanos) {
+                    nextFrameNanos = frameTimeNanos + intervalNanos
+                }
+            } else {
+                nextFrameNanos = 0L
             }
             if (lastFrameNanos == 0L) {
                 lastFrameNanos = frameTimeNanos
@@ -91,9 +135,48 @@ class GlassBackdropView @JvmOverloads constructor(
                 frameSeconds += delta.toFloat().coerceIn(0f, 0.05f)
                 lastFrameNanos = frameTimeNanos
             }
-            lastRenderNanos = frameTimeNanos
             invalidate()
-            choreographer.postFrameCallback(this)
+            if (intervalNanos > 0L) {
+                val waitMs = ((nextFrameNanos - frameTimeNanos) / 1_000_000L)
+                    .coerceAtLeast(1L)
+                choreographer.postFrameCallbackDelayed(this, waitMs)
+            } else {
+                choreographer.postFrameCallback(this)
+            }
+        }
+    }
+
+    /**
+     * The hazy home scene deliberately uses a handful of very large, soft
+     * colour fields instead of stars and bokeh. Their overlap creates the
+     * saturated blue → magenta → crimson seam while a cream pool and a silky
+     * specular fold anchor the lower half of the screen.
+     */
+    private val hazeFields = listOf(
+        HazeField(0.16f, 0.24f, 0.78f, 0.86f, -17f, Color.rgb(42, 75, 255), 0.96f, 0.020f, 0.028f, 0.0f),
+        HazeField(0.84f, 0.18f, 0.73f, 0.78f, 16f, Color.rgb(255, 11, 34), 0.93f, 0.018f, 0.024f, 2.1f),
+        HazeField(0.33f, 0.68f, 0.58f, 0.74f, 8f, Color.rgb(46, 60, 255), 0.54f, 0.026f, 0.021f, 4.2f),
+        HazeField(0.69f, 0.48f, 0.56f, 0.94f, -9f, Color.rgb(255, 61, 182), 0.55f, 0.022f, 0.027f, 1.4f),
+        HazeField(0.91f, 0.74f, 0.46f, 0.72f, 26f, Color.rgb(255, 124, 219), 0.34f, 0.017f, 0.022f, 3.6f),
+        HazeField(0.22f, 0.92f, 0.50f, 0.40f, -8f, Color.rgb(201, 217, 255), 0.22f, 0.018f, 0.016f, 0.9f),
+        HazeField(0.70f, 0.86f, 0.56f, 0.30f, -11f, Color.rgb(255, 246, 233), 0.86f, 0.018f, 0.014f, 5.0f),
+        HazeField(0.80f, 0.75f, 0.28f, 0.55f, 18f, Color.rgb(255, 249, 240), 0.55f, 0.012f, 0.018f, 0.6f),
+        HazeField(0.84f, 0.72f, 0.18f, 0.52f, 16f, Color.WHITE, 0.50f, 0.010f, 0.012f, 1.7f)
+    )
+
+    /**
+     * Applies the global refresh-rate policy. Called on the main thread by the
+     * Compose shell; the actual scene keeps animating at the chosen cadence so
+     * every glass lens still has live content to refract.
+     */
+    fun setMotionProfile(rate: LyricFrameRate, playing: Boolean) {
+        if (motionRate == rate && motionPlaying == playing) return
+        motionRate = rate
+        motionPlaying = playing
+        nextFrameNanos = 0L
+        if (animating) {
+            choreographer.removeFrameCallback(frameCallback)
+            choreographer.postFrameCallback(frameCallback)
         }
     }
 
@@ -113,6 +196,15 @@ class GlassBackdropView @JvmOverloads constructor(
         this.albumColors = null
         requestRebuild()
     }
+
+    /**
+     * True when the native scene is already configured for this preset. The
+     * activity uses this to force a preset switch even while a track is
+     * playing; previously the cover path bypassed setHome and could leave the
+     * old METABALL style active forever.
+     */
+    fun matchesHome(style: HomeBackgroundStyle, customFile: File?): Boolean =
+        this.style == style && this.customFile == customFile
 
     fun setCover(file: File?) {
         if (coverFile == file && albumColors == null) return
@@ -142,6 +234,13 @@ class GlassBackdropView @JvmOverloads constructor(
     }
 
     override fun onDraw(canvas: Canvas) {
+        // The native Canvas liquid is the reliable base on every API level.
+        // It is what QWEA0's capture records, so the glass refracts this
+        // scene rather than a possibly-empty RuntimeShader draw.
+        if (style == HomeBackgroundStyle.METABALL) {
+            metaballRenderer.draw(canvas, width, height, frameSeconds)
+            return
+        }
         val current = scene
         if (current != null && !current.bitmap.isRecycled) {
             drawLiveScene(canvas, current)
@@ -169,7 +268,7 @@ class GlassBackdropView @JvmOverloads constructor(
         if (animating || !isAttachedToWindow || !isShown || windowVisibility != VISIBLE) return
         animating = true
         lastFrameNanos = 0L
-        lastRenderNanos = 0L
+        nextFrameNanos = 0L
         choreographer.postFrameCallback(frameCallback)
     }
 
@@ -256,6 +355,7 @@ class GlassBackdropView @JvmOverloads constructor(
         val random = Random(seed)
         val palette = paletteFor(style)
         var albumColorScene = false
+        var hazeLive = false
         var sceneColors: IntArray? = null
 
         when {
@@ -270,6 +370,12 @@ class GlassBackdropView @JvmOverloads constructor(
                 albumColorScene = true
             }
 
+            style == HomeBackgroundStyle.HAZE -> {
+                drawHazeScene(canvas, width, height, random)
+                sceneColors = intArrayOf(palette.glowA, palette.glowB, palette.glowC)
+                hazeLive = true
+            }
+
             style == HomeBackgroundStyle.CUSTOM && customFile != null && customFile.exists() -> {
                 drawImageScene(canvas, width, height, customFile, 420, 110, 0.10f)
                 sceneColors = intArrayOf(palette.glowA, palette.glowB, palette.glowC)
@@ -282,14 +388,19 @@ class GlassBackdropView @JvmOverloads constructor(
         }
 
         // Album backgrounds are colour only: no stars, bokeh or texture that
-        // could read as leftover artwork. DIY presets keep their atmosphere.
-        if (!albumColorScene) {
+        // could read as leftover artwork. HAZE carries its own fine mist, and
+        // the METABALL fallback should stay clean for the shader silhouette.
+        if (!albumColorScene && !hazeLive &&
+            style != HomeBackgroundStyle.HAZE &&
+            style != HomeBackgroundStyle.METABALL
+        ) {
             drawDetail(canvas, width, height, palette, random, style, false)
         }
         return Scene(
             bitmap = bitmap,
             colors = sceneColors ?: intArrayOf(palette.glowA, palette.glowB, palette.glowC),
-            motes = buildMotes(seed)
+            motes = buildMotes(seed),
+            hazeLive = hazeLive
         )
     }
 
@@ -339,6 +450,12 @@ class GlassBackdropView @JvmOverloads constructor(
         canvas.translate(-centerX, -centerY)
         canvas.drawBitmap(current.bitmap, 0f, 0f, drawPaint)
         canvas.restore()
+
+        if (current.hazeLive) {
+            drawLiveHaze(canvas, width, height, t)
+            drawHazeScrims(canvas, width, height)
+            return
+        }
 
         if (glowShaders.size < 3) return
         drawBloom(
@@ -403,6 +520,214 @@ class GlassBackdropView @JvmOverloads constructor(
             )
             index += 5
         }
+    }
+
+    private val hazeMagentaShader: Shader =
+        radialShader(Color.rgb(255, 61, 182), 76)
+    private val hazeStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val hazeFoldPath = Path()
+    private val hazeScrimPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var hazeScrimWidth = 0f
+    private var hazeScrimHeight = 0f
+    private var hazeVerticalScrim: Shader? = null
+    private var hazeEdgeScrim: Shader? = null
+
+    /**
+     * Static base for the hazy-fluid preset. It is built off the UI thread and
+     * becomes the high-frequency layer sampled by the glass lens; the broad
+     * fields themselves are then gently moved by [drawLiveHaze].
+     */
+    private fun drawHazeScene(
+        canvas: Canvas,
+        width: Int,
+        height: Int,
+        random: Random
+    ) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val span = max(w, h)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        paint.shader = LinearGradient(
+            0f, 0f, w, h,
+            intArrayOf(Color.rgb(5, 11, 44), Color.rgb(11, 20, 72), Color.rgb(18, 7, 24)),
+            floatArrayOf(0f, 0.48f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawRect(0f, 0f, w, h, paint)
+
+        hazeFields.forEach { field ->
+            val radius = span * field.radius
+            val centerAlpha = (field.alpha * 255f).toInt().coerceIn(0, 255)
+            paint.shader = RadialGradient(
+                0f, 0f, radius,
+                intArrayOf(
+                    withAlpha(field.color, centerAlpha),
+                    withAlpha(field.color, (centerAlpha * 0.58f).toInt().coerceAtLeast(1)),
+                    Color.TRANSPARENT
+                ),
+                floatArrayOf(0f, 0.55f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            canvas.save()
+            canvas.translate(w * field.x, h * field.y)
+            canvas.rotate(field.rotation)
+            canvas.scale(1f, field.stretch)
+            canvas.drawCircle(0f, 0f, radius, paint)
+            canvas.restore()
+        }
+        paint.shader = null
+
+        // A whisper of fixed mist gives the lens something to refract without
+        // turning into a star field. Large, soft fields alone look painted.
+        repeat((width * height / 9000).coerceIn(140, 420)) {
+            paint.color = Color.argb(
+                4 + random.nextInt(9),
+                255,
+                243,
+                247
+            )
+            canvas.drawCircle(
+                random.nextFloat() * w,
+                random.nextFloat() * h,
+                0.45f + random.nextFloat() * 1.05f,
+                paint
+            )
+        }
+    }
+
+    private fun drawLiveHaze(canvas: Canvas, width: Float, height: Float, t: Float) {
+        if (glowShaders.size < 3) return
+        val twoPi = 6.28318f
+
+        // The big colour masses drift slowly enough to feel liquid rather than
+        // animated. The cream pool stays at the lower right and catches a
+        // travelling sheen, just like the player's fluid cover scene.
+        drawHazeBloom(canvas, width, height, t, hazeFields[0], glowShaders[0],
+            0.34f + 0.08f * sin(t * twoPi / 58f))
+        drawHazeBloom(canvas, width, height, t, hazeFields[1], glowShaders[1],
+            0.30f + 0.07f * cos(t * twoPi / 61f))
+        drawHazeBloom(canvas, width, height, t, hazeFields[3], hazeMagentaShader,
+            0.17f + 0.05f * sin(t * twoPi / 63f + 1.1f))
+        drawHazeBloom(canvas, width, height, t, hazeFields[6], glowShaders[2],
+            0.22f + 0.07f * sin(t * twoPi / 59f + 0.9f))
+
+        val sheen = 0.5f + 0.5f * sin(t * twoPi / 58f)
+        drawPaint.shader = LinearGradient(
+            width * (0.02f + 0.15f * sheen), height * 0.04f,
+            width * (0.74f + 0.12f * sheen), height * 0.98f,
+            intArrayOf(
+                Color.TRANSPARENT,
+                Color.argb(15, 255, 243, 237),
+                Color.argb(9, 255, 220, 232),
+                Color.TRANSPARENT
+            ),
+            floatArrayOf(0f, 0.36f, 0.68f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawRect(0f, 0f, width, height, drawPaint)
+        drawPaint.shader = null
+
+        val foldY = height * (0.77f + 0.018f * sin(t * twoPi / 52f))
+        val short = min(width, height)
+        hazeFoldPath.reset()
+        hazeFoldPath.moveTo(width * 0.22f, foldY + height * 0.045f)
+        hazeFoldPath.cubicTo(
+            width * 0.42f, foldY - height * 0.09f,
+            width * 0.66f, foldY + height * 0.075f,
+            width * 1.02f, foldY - height * 0.03f
+        )
+        hazeStrokePaint.strokeWidth = short * 0.089f
+        hazeStrokePaint.shader = LinearGradient(
+            width * 0.04f, foldY,
+            width, foldY - height * 0.06f,
+            intArrayOf(
+                Color.TRANSPARENT,
+                Color.argb(20, 255, 245, 237),
+                Color.argb(33, 255, 221, 233),
+                Color.argb(26, 255, 248, 241),
+                Color.TRANSPARENT
+            ),
+            floatArrayOf(0f, 0.22f, 0.50f, 0.76f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawPath(hazeFoldPath, hazeStrokePaint)
+        hazeStrokePaint.shader = null
+        hazeStrokePaint.strokeWidth = short * 0.036f
+        hazeStrokePaint.color = Color.argb(23, 255, 255, 255)
+        canvas.drawPath(hazeFoldPath, hazeStrokePaint)
+        hazeStrokePaint.strokeWidth = short * 0.0056f
+        hazeStrokePaint.color = Color.argb(38, 255, 255, 255)
+        canvas.drawPath(hazeFoldPath, hazeStrokePaint)
+    }
+
+    private fun drawHazeBloom(
+        canvas: Canvas,
+        width: Float,
+        height: Float,
+        t: Float,
+        field: HazeField,
+        shader: Shader,
+        alpha: Float
+    ) {
+        val phase = t * 6.28318f / 46f + field.phase
+        val centerX = width * (field.x + sin(phase) * field.driftX)
+        val centerY = height * (field.y + cos(phase * 0.87f) * field.driftY)
+        val radius = max(width, height) * field.radius
+        glowPaint.shader = shader
+        glowPaint.alpha = (alpha.coerceIn(0f, 1f) * 255f).toInt()
+        canvas.save()
+        canvas.translate(centerX, centerY)
+        canvas.rotate(field.rotation + sin(phase) * 3f)
+        canvas.scale(1f, field.stretch)
+        canvas.scale(radius, radius)
+        canvas.drawCircle(0f, 0f, 1f, glowPaint)
+        canvas.restore()
+    }
+
+    private fun drawHazeScrims(canvas: Canvas, width: Float, height: Float) {
+        if (width != hazeScrimWidth || height != hazeScrimHeight) {
+            hazeScrimWidth = width
+            hazeScrimHeight = height
+            hazeVerticalScrim = LinearGradient(
+                0f, 0f, 0f, height,
+                intArrayOf(
+                    Color.argb(46, 0, 0, 0),
+                    Color.TRANSPARENT,
+                    Color.TRANSPARENT,
+                    Color.argb(87, 0, 0, 0)
+                ),
+                floatArrayOf(0f, 0.20f, 0.72f, 1f),
+                Shader.TileMode.CLAMP
+            )
+            hazeEdgeScrim = if (width > height * 1.02f) {
+                LinearGradient(
+                    0f, 0f, width, 0f,
+                    intArrayOf(
+                        Color.argb(41, 0, 0, 0),
+                        Color.TRANSPARENT,
+                        Color.TRANSPARENT,
+                        Color.argb(15, 0, 0, 0)
+                    ),
+                    floatArrayOf(0f, 0.40f, 0.82f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+            } else {
+                RadialGradient(
+                    width * 0.50f, height * 0.44f, max(width, height) * 0.78f,
+                    intArrayOf(Color.TRANSPARENT, Color.argb(46, 0, 0, 0)),
+                    floatArrayOf(0f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+            }
+        }
+        hazeScrimPaint.shader = hazeVerticalScrim
+        canvas.drawRect(0f, 0f, width, height, hazeScrimPaint)
+        hazeScrimPaint.shader = hazeEdgeScrim
+        canvas.drawRect(0f, 0f, width, height, hazeScrimPaint)
+        hazeScrimPaint.shader = null
     }
 
     private fun drawBloom(
@@ -926,6 +1251,28 @@ class GlassBackdropView @JvmOverloads constructor(
     }
 
     private fun paletteFor(style: HomeBackgroundStyle): Palette = when (style) {
+        HomeBackgroundStyle.METABALL -> Palette(
+            top = Color.rgb(2, 1, 5),
+            middle = Color.rgb(10, 3, 18),
+            bottom = Color.rgb(3, 1, 6),
+            glowA = Color.rgb(196, 10, 116),
+            glowB = Color.rgb(76, 9, 158),
+            glowC = Color.rgb(255, 59, 179),
+            starCount = 0,
+            starDensity = 0.35f
+        )
+
+        HomeBackgroundStyle.HAZE -> Palette(
+            top = Color.rgb(5, 11, 44),
+            middle = Color.rgb(11, 20, 72),
+            bottom = Color.rgb(18, 7, 24),
+            glowA = Color.rgb(42, 75, 255),
+            glowB = Color.rgb(255, 11, 34),
+            glowC = Color.rgb(255, 246, 233),
+            starCount = 0,
+            starDensity = 0.8f
+        )
+
         HomeBackgroundStyle.LIQUID -> Palette(
             top = Color.rgb(8, 7, 17),
             middle = Color.rgb(12, 10, 22),

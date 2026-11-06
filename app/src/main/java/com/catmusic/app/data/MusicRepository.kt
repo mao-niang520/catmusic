@@ -43,6 +43,37 @@ class MusicRepository private constructor(context: Context) {
     )
     val lyricFrameRate: StateFlow<LyricFrameRate> = _lyricFrameRate.asStateFlow()
 
+    private val _lyricTranslationMode = MutableStateFlow(
+        LyricTranslationMode.fromKey(prefs.getString(KEY_LYRIC_TRANSLATION, null))
+    )
+    val lyricTranslationMode: StateFlow<LyricTranslationMode> =
+        _lyricTranslationMode.asStateFlow()
+
+    private val _fadeInMs = MutableStateFlow(
+        prefs.getInt(KEY_FADE_IN_MS, DEFAULT_FADE_IN_MS).coerceIn(0, MAX_FADE_MS)
+    )
+    val fadeInMs: StateFlow<Int> = _fadeInMs.asStateFlow()
+
+    private val _fadeOutMs = MutableStateFlow(
+        prefs.getInt(KEY_FADE_OUT_MS, DEFAULT_FADE_OUT_MS).coerceIn(0, MAX_FADE_MS)
+    )
+    val fadeOutMs: StateFlow<Int> = _fadeOutMs.asStateFlow()
+
+    private val _desktopLyricsEnabled = MutableStateFlow(
+        prefs.getBoolean(KEY_DESKTOP_LYRICS, false)
+    )
+    val desktopLyricsEnabled: StateFlow<Boolean> = _desktopLyricsEnabled.asStateFlow()
+
+    private val _desktopLyricsConfig = MutableStateFlow(loadDesktopLyricsConfig())
+    val desktopLyricsConfig: StateFlow<DesktopLyricsConfig> =
+        _desktopLyricsConfig.asStateFlow()
+
+    private val _libraryLayoutStyle = MutableStateFlow(
+        LibraryLayoutStyle.fromKey(prefs.getString(KEY_LIBRARY_LAYOUT, null))
+    )
+    val libraryLayoutStyle: StateFlow<LibraryLayoutStyle> =
+        _libraryLayoutStyle.asStateFlow()
+
     private val _playlists = MutableStateFlow<List<Playlist>>(emptyList())
     val playlists: StateFlow<List<Playlist>> = _playlists.asStateFlow()
 
@@ -107,6 +138,62 @@ class MusicRepository private constructor(context: Context) {
         _lyricFrameRate.value = rate
         prefs.edit().putString(KEY_LYRIC_FPS, rate.key).apply()
     }
+
+    fun setLyricTranslationMode(mode: LyricTranslationMode) {
+        _lyricTranslationMode.value = mode
+        prefs.edit().putString(KEY_LYRIC_TRANSLATION, mode.key).apply()
+    }
+
+    fun setFadeInMs(value: Int) {
+        val normalized = value.coerceIn(0, MAX_FADE_MS)
+        if (_fadeInMs.value == normalized) return
+        _fadeInMs.value = normalized
+        prefs.edit().putInt(KEY_FADE_IN_MS, normalized).apply()
+    }
+
+    fun setFadeOutMs(value: Int) {
+        val normalized = value.coerceIn(0, MAX_FADE_MS)
+        if (_fadeOutMs.value == normalized) return
+        _fadeOutMs.value = normalized
+        prefs.edit().putInt(KEY_FADE_OUT_MS, normalized).apply()
+    }
+
+    fun setDesktopLyricsEnabled(enabled: Boolean) {
+        _desktopLyricsEnabled.value = enabled
+        prefs.edit().putBoolean(KEY_DESKTOP_LYRICS, enabled).apply()
+    }
+
+    fun setLibraryLayoutStyle(style: LibraryLayoutStyle) {
+        if (_libraryLayoutStyle.value == style) return
+        _libraryLayoutStyle.value = style
+        prefs.edit().putString(KEY_LIBRARY_LAYOUT, style.key).apply()
+    }
+
+    fun setDesktopLyricsConfig(config: DesktopLyricsConfig) {
+        val normalized = config.normalized()
+        if (_desktopLyricsConfig.value == normalized) return
+        _desktopLyricsConfig.value = normalized
+        prefs.edit()
+            .putString(KEY_DESKTOP_STYLE, normalized.style.key)
+            .putInt(KEY_DESKTOP_COLOR, normalized.colorArgb)
+            .putFloat(KEY_DESKTOP_FONT_SIZE, normalized.fontSizeSp)
+            .putBoolean(KEY_DESKTOP_LOCKED, normalized.locked)
+            .apply()
+    }
+
+    private fun loadDesktopLyricsConfig(): DesktopLyricsConfig =
+        DesktopLyricsConfig(
+            style = DesktopLyricsStyle.fromKey(prefs.getString(KEY_DESKTOP_STYLE, null)),
+            colorArgb = prefs.getInt(
+                KEY_DESKTOP_COLOR,
+                DesktopLyricsConfig.DEFAULT_COLOR
+            ),
+            fontSizeSp = prefs.getFloat(
+                KEY_DESKTOP_FONT_SIZE,
+                DesktopLyricsConfig.DEFAULT_FONT_SIZE_SP
+            ),
+            locked = prefs.getBoolean(KEY_DESKTOP_LOCKED, false)
+        ).normalized()
 
     /**
      * Adds or updates a shortcut. Returns false when the ten-slot limit is
@@ -415,6 +502,7 @@ class MusicRepository private constructor(context: Context) {
         runCatching {
             artworkDir().listFiles()?.forEach { it.delete() }
             lyricsDir().listFiles()?.forEach { it.delete() }
+            LyricDisplayLoader.clearCache(appContext)
         }
     }
 
@@ -422,6 +510,7 @@ class MusicRepository private constructor(context: Context) {
         AudioFileStore.deleteManagedAudio(appContext, track.uri)
         deleteFilesWithPrefix(artworkDir(), track.id)
         deleteFilesWithPrefix(lyricsDir(), track.id)
+        LyricDisplayLoader.deleteCache(appContext, track.id)
     }
 
     private fun deleteFilesWithPrefix(directory: File, prefix: String) {
@@ -753,6 +842,18 @@ class MusicRepository private constructor(context: Context) {
         private const val KEY_AUDIO_REACTIVE = "audio_reactive_particles"
         private const val KEY_AUDIO_LEVEL = "audio_reactive_level"
         private const val KEY_LYRIC_FPS = "lyric_render_fps"
+        private const val KEY_LYRIC_TRANSLATION = "lyric_translation_mode_v1"
+        private const val KEY_FADE_IN_MS = "playback_fade_in_ms_v1"
+        private const val KEY_FADE_OUT_MS = "playback_fade_out_ms_v1"
+        private const val KEY_DESKTOP_LYRICS = "desktop_lyrics_enabled_v1"
+        private const val KEY_DESKTOP_STYLE = "desktop_lyrics_style_v1"
+        private const val KEY_DESKTOP_COLOR = "desktop_lyrics_color_v1"
+        private const val KEY_DESKTOP_FONT_SIZE = "desktop_lyrics_font_size_v1"
+        private const val KEY_DESKTOP_LOCKED = "desktop_lyrics_locked_v1"
+        private const val DEFAULT_FADE_IN_MS = 500
+        private const val DEFAULT_FADE_OUT_MS = 300
+        private const val MAX_FADE_MS = 2_000
+        private const val KEY_LIBRARY_LAYOUT = "library_layout_style_v1"
         private const val KEY_PLAYLISTS = "playlists"
         private const val KEY_QUICK_LINKS = "quick_links"
         private const val KEY_HOME_BACKGROUND = "home_background"

@@ -45,6 +45,10 @@
     lyricsEmpty: byId("lyrics-empty"),
     plainLyrics: byId("plain-lyrics"),
     plainInner: byId("plain-inner"),
+    lyricSeekHud: byId("lyric-seek-hud"),
+    lyricSeekTime: byId("lyric-seek-time"),
+    lyricSeekHint: byId("lyric-seek-hint"),
+    lyricSeekReturn: byId("lyric-seek-return"),
     importEmpty: byId("import-empty"),
     progressArea: byId("progress-area"),
     progressFill: byId("progress-fill"),
@@ -108,12 +112,12 @@
   const EFFECTS = {
     orbit: {
       label: "星潮",
-      hint: "单指拖动可 360° 旋转封面星潮，双指张合缩放；视角不会钻到球体下方。轻点歌词跳转。",
-      description: "约一万个光点按当前封面逐点取色。低频让球壳呼吸，鼓点将它炸成空心云团，再缓慢回吸。"
+      hint: "左右拖动可连续旋转封面星潮 360°，上下拖动倾斜视角，双指张合缩放；上下拖动歌词预览跳转，轻点歌词跳转。",
+      description: "约一万个按纬线整齐排列的光点按当前封面逐点取色，封面更换时同步换色。低频让球壳呼吸，鼓点将它炸成空心云团。"
     },
     tide: {
       label: "回声",
-      hint: "单指拖动环绕回声波面，双指张合缩放；波动跟随低频，鼓点向外推出环状涟漪。轻点歌词跳转。",
+      hint: "单指拖动环绕回声波面，双指张合缩放；波动跟随低频，鼓点向外推出环状涟漪。上下拖动歌词预览跳转，轻点歌词跳转。",
       description: "多层透视光带组成一片声波水面。低频抬起波谷，节拍向外推开光圈，光带颜色同样取自封面。"
     }
   };
@@ -163,6 +167,15 @@
     seekStartX: 0,
     seekStartY: 0,
     seekStarted: false,
+    lyricSeekPointerId: null,
+    lyricSeekItem: null,
+    lyricSeekStartX: 0,
+    lyricSeekStartY: 0,
+    lyricSeekStartIndex: 0,
+    lyricSeekIndex: -1,
+    lyricSeekMoved: false,
+    lyricSeekReturnTimer: 0,
+    ignoreLyricClickUntil: 0,
     bootDone: false,
     readySent: false,
     lastProgressKey: "",
@@ -178,6 +191,10 @@
   };
 
   const field = window.CatField;
+
+  function boostFieldFrameRate() {
+    if (field && typeof field.boostFrameRate === "function") field.boostFrameRate();
+  }
 
   function callNative(name, value) {
     const bridge = window.CatMusicBridge;
@@ -358,6 +375,7 @@
   }
 
   function clearLyricDom() {
+    clearLyricSeekPreview(false);
     dom.lyricsTrack.replaceChildren();
     dom.plainInner.replaceChildren();
     state.lines = [];
@@ -367,6 +385,7 @@
 
   function applyLyrics(payload) {
     if (!payload || typeof payload !== "object") return;
+    boostFieldFrameRate();
     if (payload.loading) {
       state.loading = true;
       state.hasLyrics = false;
@@ -435,15 +454,28 @@
         item.appendChild(translation);
       }
 
-      const activate = () => {
+      const activate = event => {
         if (!state.hasTiming || state.calibrating) return;
+        if (performance.now() < state.ignoreLyricClickUntil) {
+          if (event && event.cancelable) event.preventDefault();
+          return;
+        }
+        if (state.lyricSeekIndex >= 0) {
+          if (event && event.cancelable) event.preventDefault();
+          commitLyricSeekPreview();
+          return;
+        }
         seekTo(line.t + state.offsetMs);
       };
       item.addEventListener("click", activate);
+      item.addEventListener("pointerdown", onLyricSeekDown);
+      item.addEventListener("pointermove", onLyricSeekMove, { passive: false });
+      item.addEventListener("pointerup", onLyricSeekUp);
+      item.addEventListener("pointercancel", onLyricSeekCancel);
       item.addEventListener("keydown", event => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          activate();
+          activate(event);
         }
       });
       fragment.appendChild(item);
@@ -495,11 +527,187 @@
     return found;
   }
 
+  function lyricSeekTimeMs(index) {
+    if (state.lines.length === 0) return 0;
+    const line = state.lines[clamp(index, 0, state.lines.length - 1)];
+    if (!line) return 0;
+    return Math.max(0, line.t + state.offsetMs);
+  }
+
+  function lyricLinePitch() {
+    const items = dom.lyricsTrack.children;
+    const center = state.lyricSeekIndex >= 0
+      ? state.lyricSeekIndex
+      : (state.activeIndex >= 0 ? state.activeIndex : 0);
+    const item = items[clamp(center, 0, items.length - 1)];
+    const height = item ? item.getBoundingClientRect().height : 44;
+    return clamp(height || 44, 28, 88);
+  }
+
+  function showLyricSeekHud() {
+    if (!dom.lyricSeekHud) return;
+    dom.lyricSeekHud.hidden = false;
+    requestAnimationFrame(() => {
+      if (dom.lyricSeekHud) dom.lyricSeekHud.classList.add("visible");
+    });
+  }
+
+  function hideLyricSeekHud() {
+    if (!dom.lyricSeekHud) return;
+    dom.lyricSeekHud.classList.remove("visible");
+    dom.lyricSeekHud.hidden = true;
+  }
+
+  function idleLyricSeekHud() {
+    if (dom.lyricSeekHint) dom.lyricSeekHint.textContent = "点击跳转";
+    if (dom.lyricSeekReturn) dom.lyricSeekReturn.textContent = "3 秒后返回";
+  }
+
+  function setLyricSeekPreview(index, dragging) {
+    if (!state.hasTiming || state.lines.length === 0) return;
+    const next = clamp(Math.round(index), 0, state.lines.length - 1);
+    state.lyricSeekIndex = next;
+    if (dom.lyricSeekTime) {
+      dom.lyricSeekTime.textContent = formatTime(lyricSeekTimeMs(next));
+    }
+    if (dom.lyricSeekHint) {
+      dom.lyricSeekHint.textContent = dragging
+        ? "上滑快进 · 下滑回退"
+        : "点击跳转";
+    }
+    if (dom.lyricSeekReturn) {
+      dom.lyricSeekReturn.textContent = dragging ? "松手后点击" : "3 秒后返回";
+    }
+    showLyricSeekHud();
+    updateLineWindow();
+    scrollToActive(false);
+  }
+
+  function clearLyricSeekPreview(restore) {
+    clearTimeout(state.lyricSeekReturnTimer);
+    state.lyricSeekReturnTimer = 0;
+    state.lyricSeekPointerId = null;
+    state.lyricSeekItem = null;
+    state.lyricSeekMoved = false;
+    const hadPreview = state.lyricSeekIndex >= 0;
+    state.lyricSeekIndex = -1;
+    hideLyricSeekHud();
+    if (restore !== false && hadPreview) updateActive(true);
+  }
+
+  function scheduleLyricSeekReturn() {
+    clearTimeout(state.lyricSeekReturnTimer);
+    state.lyricSeekReturnTimer = window.setTimeout(() => {
+      if (state.lyricSeekPointerId !== null) return;
+      if (state.lyricSeekIndex < 0) return;
+      clearLyricSeekPreview(true);
+    }, 3000);
+  }
+
+  function commitLyricSeekPreview() {
+    if (state.lyricSeekIndex < 0) return;
+    const target = lyricSeekTimeMs(state.lyricSeekIndex);
+    clearLyricSeekPreview(false);
+    seekTo(target);
+  }
+
+  function onLyricSeekDown(event) {
+    if (!state.hasTiming || state.calibrating || state.menuOpen) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if (state.lyricSeekPointerId !== null) return;
+    // Pause the return countdown while a finger is down so a tap landing near
+    // the deadline still commits instead of being cleared first.
+    clearTimeout(state.lyricSeekReturnTimer);
+    state.lyricSeekReturnTimer = 0;
+    state.lyricSeekPointerId = event.pointerId;
+    state.lyricSeekItem = event.currentTarget;
+    state.lyricSeekStartX = event.clientX;
+    state.lyricSeekStartY = event.clientY;
+    state.lyricSeekStartIndex = state.lyricSeekIndex >= 0
+      ? state.lyricSeekIndex
+      : (state.activeIndex >= 0 ? state.activeIndex : 0);
+    state.lyricSeekMoved = false;
+    if (state.lyricSeekItem && state.lyricSeekItem.setPointerCapture) {
+      try {
+        state.lyricSeekItem.setPointerCapture(event.pointerId);
+      } catch (error) {
+        /* Some WebViews reject capture on the initial touch. */
+      }
+    }
+  }
+
+  function onLyricSeekMove(event) {
+    if (state.lyricSeekPointerId !== event.pointerId) return;
+    const dx = event.clientX - state.lyricSeekStartX;
+    const dy = event.clientY - state.lyricSeekStartY;
+    if (!state.lyricSeekMoved) {
+      if (Math.abs(dy) <= 8 || Math.abs(dy) <= Math.abs(dx)) return;
+      state.lyricSeekMoved = true;
+      setLyricSeekPreview(state.lyricSeekStartIndex, true);
+    }
+    if (event.cancelable) event.preventDefault();
+    const steps = Math.round(-dy / lyricLinePitch());
+    const next = clamp(
+      state.lyricSeekStartIndex + steps,
+      0,
+      state.lines.length - 1
+    );
+    if (next !== state.lyricSeekIndex) setLyricSeekPreview(next, true);
+  }
+
+  function finishLyricSeek(event, commit) {
+    if (state.lyricSeekPointerId !== event.pointerId) return;
+    if (state.lyricSeekItem && state.lyricSeekItem.releasePointerCapture) {
+      try {
+        state.lyricSeekItem.releasePointerCapture(event.pointerId);
+      } catch (error) {
+        /* noop */
+      }
+    }
+    const moved = state.lyricSeekMoved;
+    state.lyricSeekPointerId = null;
+    state.lyricSeekItem = null;
+    state.lyricSeekMoved = false;
+    if (moved) {
+      state.ignoreLyricClickUntil = performance.now() + 600;
+      if (event.cancelable) event.preventDefault();
+      if (commit && state.lyricSeekIndex >= 0) {
+        idleLyricSeekHud();
+        scheduleLyricSeekReturn();
+      }
+      return;
+    }
+    if (commit && state.lyricSeekIndex >= 0) {
+      state.ignoreLyricClickUntil = performance.now() + 600;
+      if (event.cancelable) event.preventDefault();
+      commitLyricSeekPreview();
+    }
+  }
+
+  function onLyricSeekUp(event) {
+    finishLyricSeek(event, true);
+  }
+
+  function onLyricSeekCancel(event) {
+    if (state.lyricSeekPointerId !== event.pointerId) return;
+    const wasMoved = state.lyricSeekMoved;
+    state.lyricSeekPointerId = null;
+    state.lyricSeekItem = null;
+    state.lyricSeekMoved = false;
+    if (wasMoved && state.lyricSeekIndex >= 0) {
+      state.ignoreLyricClickUntil = performance.now() + 600;
+      idleLyricSeekHud();
+      scheduleLyricSeekReturn();
+    }
+  }
+
   function updateLineWindow() {
     if (!state.hasTiming) return;
     const items = dom.lyricsTrack.children;
     if (!items.length) return;
-    const center = state.activeIndex >= 0 ? state.activeIndex : 0;
+    const center = state.lyricSeekIndex >= 0
+      ? state.lyricSeekIndex
+      : (state.activeIndex >= 0 ? state.activeIndex : 0);
     const half = Math.floor((state.lineCount - 1) / 2);
     const first = center - half;
     const last = first + state.lineCount - 1;
@@ -507,7 +715,8 @@
     for (let index = 0; index < items.length; index++) {
       const item = items[index];
       let className = "lyric-line";
-      if (index === state.activeIndex) className += " active";
+      if (index === state.lyricSeekIndex) className += " seek-target";
+      else if (index === state.activeIndex) className += " active";
       else if (Math.abs(index - center) <= 1) className += " near";
       else if (Math.abs(index - center) === 2) className += " far";
       else className += " faint";
@@ -520,7 +729,9 @@
     if (!state.hasTiming) return;
     const items = dom.lyricsTrack.children;
     if (!items.length) return;
-    const anchor = state.activeIndex >= 0 ? state.activeIndex : 0;
+    const anchor = state.lyricSeekIndex >= 0
+      ? state.lyricSeekIndex
+      : (state.activeIndex >= 0 ? state.activeIndex : 0);
     const item = items[clamp(anchor, 0, items.length - 1)];
     if (!item) return;
     const offset = -(item.offsetTop + item.offsetHeight / 2);
@@ -541,6 +752,7 @@
     const index = activeIndexFor(currentPosition());
     if (index !== state.activeIndex) {
       state.activeIndex = index;
+      boostFieldFrameRate();
       updateLineWindow();
       scrollToActive(true);
     } else if (forceScroll) {
@@ -904,6 +1116,7 @@
   function setMenuOpen(open, restoreFocus) {
     if (open === state.menuOpen) return;
     state.menuOpen = open;
+    boostFieldFrameRate();
     dom.openMenu.setAttribute("aria-expanded", open ? "true" : "false");
     if (open) {
       updateMenuHeight();
@@ -1235,6 +1448,7 @@
       }
       if (nextPlaying !== state.playing) {
         state.playing = nextPlaying;
+        boostFieldFrameRate();
         updatePlayIcon();
       }
       if (typeof payload.offset === "number") {

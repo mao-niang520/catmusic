@@ -165,7 +165,7 @@ fun HomeBackgroundCard(
 
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "播放歌曲时，界面背景会自动换成当前专辑封面的模糊色彩；未播放时使用这里选择的预设或自定义图片。预设与图片都在本地绘制/读取，不联网；自定义图片会复制到软件私有目录并压缩保存，删除手机原图不影响显示。",
+                text = "「熔岩流体」会一直保持品红 / 深紫的 MetaBall 动画，播放歌曲时也不会被封面替换；其他预设和自定义图片在播放时会自动换成当前专辑封面的模糊色彩。预设与图片都在本地绘制/读取，不联网；自定义图片会复制到软件私有目录并压缩保存，删除手机原图不影响显示。",
                 style = MaterialTheme.typography.bodySmall,
                 color = CatTextTertiary.copy(alpha = 0.78f),
                 lineHeight = 17.sp
@@ -253,6 +253,54 @@ private fun BackgroundPresetTile(
                             .matchParentSize()
                             .background(presetBrush(style))
                     )
+                    if (style == HomeBackgroundStyle.HAZE) {
+                        Canvas(Modifier.matchParentSize()) {
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    colors = listOf(
+                                        Color(0xFFFFF7EE).copy(alpha = 0.60f),
+                                        Color(0xFFFFDCE9).copy(alpha = 0.22f),
+                                        Color.Transparent
+                                    ),
+                                    center = Offset(size.width * 0.76f, size.height * 0.82f),
+                                    radius = size.minDimension * 0.54f
+                                ),
+                                radius = size.minDimension * 0.54f,
+                                center = Offset(size.width * 0.76f, size.height * 0.82f)
+                            )
+                        }
+                    }
+                    if (style == HomeBackgroundStyle.METABALL) {
+                        Canvas(Modifier.matchParentSize()) {
+                            val radius = size.minDimension * 0.34f
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    colors = listOf(
+                                        Color(0xFFE00B87).copy(alpha = 0.78f),
+                                        Color(0xFF7A0754).copy(alpha = 0.32f),
+                                        Color.Transparent
+                                    ),
+                                    center = Offset(size.width * 0.40f, size.height * 0.52f),
+                                    radius = radius
+                                ),
+                                radius = radius,
+                                center = Offset(size.width * 0.40f, size.height * 0.52f)
+                            )
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    colors = listOf(
+                                        Color(0xFF5A1FC8).copy(alpha = 0.74f),
+                                        Color(0xFF25084F).copy(alpha = 0.30f),
+                                        Color.Transparent
+                                    ),
+                                    center = Offset(size.width * 0.62f, size.height * 0.54f),
+                                    radius = radius * 0.92f
+                                ),
+                                radius = radius * 0.92f,
+                                center = Offset(size.width * 0.62f, size.height * 0.54f)
+                            )
+                        }
+                    }
                     if (style == HomeBackgroundStyle.STARFIELD) {
                         Canvas(Modifier.matchParentSize()) {
                             val points = listOf(
@@ -313,7 +361,9 @@ private fun BackgroundPresetTile(
         Spacer(Modifier.height(2.dp))
         Text(
             text = when (style) {
-                HomeBackgroundStyle.AURORA -> "默认"
+                HomeBackgroundStyle.METABALL -> "默认"
+                HomeBackgroundStyle.HAZE -> "蓝红"
+                HomeBackgroundStyle.AURORA -> "极光"
                 HomeBackgroundStyle.LIQUID -> "流光"
                 HomeBackgroundStyle.STARFIELD -> "星野"
                 HomeBackgroundStyle.DUSK -> "暖色"
@@ -329,6 +379,23 @@ private fun BackgroundPresetTile(
 }
 
 private fun presetBrush(style: HomeBackgroundStyle): Brush = when (style) {
+    HomeBackgroundStyle.METABALL -> Brush.linearGradient(
+        listOf(
+            Color(0xFF030105),
+            Color(0xFF1A042A),
+            Color(0xFF07020A)
+        )
+    )
+
+    HomeBackgroundStyle.HAZE -> Brush.linearGradient(
+        listOf(
+            Color(0xFF1429A8),
+            Color(0xFF3B196F),
+            Color(0xFF7E1638),
+            Color(0xFF2A1930)
+        )
+    )
+
     HomeBackgroundStyle.LIQUID -> Brush.linearGradient(
         listOf(
             Color(0xFF2E2456),

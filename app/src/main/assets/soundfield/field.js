@@ -2,7 +2,7 @@
  * CatMusic sound field — an original WebGL stage for the full-screen lyric page.
  *
  * Two effects share one canvas and one palette:
- *   orbit — 10,000 cover-coloured points wrapped around a slowly turning globe.
+ *   orbit — roughly ten thousand cover-coloured points in even latitude rings.
  *   tide  — a perspective lattice of light ribbons that ripples with the low end.
  *
  * The renderer has no third-party scene, shader or geometry code. It receives
@@ -26,57 +26,101 @@
   const qualityKey = params.get("quality") || "immersive";
   const QUALITY = {
     light: {
-      meridians: 60,
+      orbRings: 48,
+      orbMeridians: 176,
       tideRows: 54,
       tideCols: 128,
       tideColumnStep: 12,
       pointStepRow: 3,
       pointStepCol: 4,
-      dpr: 1.6,
-      glint: 0.045
+      dpr: 1.6
     },
     balanced: {
-      meridians: 80,
+      orbRings: 56,
+      orbMeridians: 190,
       tideRows: 64,
       tideCols: 144,
       tideColumnStep: 10,
       pointStepRow: 2,
       pointStepCol: 3,
-      dpr: 1.8,
-      glint: 0.070
+      dpr: 1.8
     },
     immersive: {
-      meridians: 100,
+      orbRings: 64,
+      orbMeridians: 200,
       tideRows: 78,
       tideCols: 160,
       tideColumnStep: 8,
       pointStepRow: 2,
       pointStepCol: 2,
-      dpr: 2.25,
-      glint: 0.095
+      dpr: 2.25
     },
     ultra: {
-      meridians: 100,
+      orbRings: 72,
+      orbMeridians: 200,
       tideRows: 92,
       tideCols: 184,
       tideColumnStep: 7,
       pointStepRow: 2,
       pointStepCol: 2,
-      dpr: 2.5,
-      glint: 0.125
+      dpr: 2.5
     }
   };
   const config = QUALITY[qualityKey] || QUALITY.immersive;
-  const RINGS = 100;
 
-  const fpsParam = params.get("fps") || "60";
-  const targetFps = fpsParam === "unlimited" || fpsParam === "0"
+  let fpsMode = (params.get("fps") || "adaptive").trim().toLowerCase();
+  let adaptiveFps = fpsMode === "adaptive";
+  let targetFps = adaptiveFps
     ? 0
-    : Math.min(240, Math.max(24, parseInt(fpsParam, 10) || 60));
-  const frameInterval = targetFps > 0 ? 1000 / targetFps : 0;
+    : (fpsMode === "unlimited" || fpsMode === "0"
+      ? 0
+      : Math.min(240, Math.max(24, parseInt(fpsMode, 10) || 60)));
+  let frameInterval = targetFps > 0 ? 1000 / targetFps : 0;
+  let lastBoostAt = 0;
+
+  /**
+   * Adaptive mode runs at 24 fps while paused, 30 while playing, and briefly
+   * unlocks 60 fps for gestures, track changes and lyric line changes.
+   */
+  function boostFrameRate(durationMs = 1100) {
+    const now = performance.now();
+    if (now - lastBoostAt < 48) return;
+    lastBoostAt = now;
+    const until = now + Math.max(180, Number(durationMs) || 1100);
+    if (until > state.frameBoostUntil) state.frameBoostUntil = until;
+  }
+
+  function setFrameRate(value) {
+    const next = String(value == null ? "adaptive" : value).trim().toLowerCase();
+    fpsMode = next;
+    adaptiveFps = next === "adaptive";
+    const parsed = parseInt(next, 10);
+    targetFps = (!adaptiveFps && next !== "unlimited" && next !== "0" &&
+      Number.isFinite(parsed))
+      ? Math.min(240, Math.max(24, parsed))
+      : 0;
+    frameInterval = targetFps > 0 ? 1000 / targetFps : 0;
+    state.frameAccumulator = adaptiveFps ? 0 : frameInterval;
+    state.lastFrameAt = 0;
+    boostFrameRate(1200);
+    if (state.visible) start();
+  }
+
+  function frameIntervalFor(now) {
+    if (!adaptiveFps) return frameInterval;
+    const fps = now < state.frameBoostUntil
+      ? 60
+      : (state.audioTarget.playing ? 30 : 24);
+    return 1000 / fps;
+  }
 
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
   const mix = (a, b, t) => a + (b - a) * t;
+  const fract = value => value - Math.floor(value);
+
+  function hash01(value) {
+    return fract(Math.sin(value * 127.1 + 311.7) * 43758.5453123);
+  }
 
   function readEffect() {
     try {
@@ -167,6 +211,7 @@
     lastTime: 0,
     lastFrameAt: 0,
     frameAccumulator: 0,
+    frameBoostUntil: 0,
     lastBeatAt: -10,
     drawnFrames: 0,
     width: 0,
@@ -178,6 +223,7 @@
       tide: readView(EFFECT_TIDE)
     },
     orbitSpin: 0,
+    orbitYawVelocity: 0,
     lastOrbitDragAt: -10,
     orbitAutoAt: 0,
     gyroYaw: 0,
@@ -190,6 +236,7 @@
     pinchZoom: 1,
     raf: 0,
     visible: !document.hidden,
+    manualHidden: false,
     dirtyOrb: true,
     dirtyTide: true
   };
@@ -242,19 +289,15 @@
     }
 
     void main() {
-      bool halo = aKind > 0.5;
       float band = bandValue(aPosition.y);
-      float twinkle = 0.5 + 0.5 * sin(uTime * (0.58 + aSeed.x * 0.90)
-                           + aSeed.y * 6.2831);
       float energy = clamp(uLevel * 1.16 + uB0 * 0.38 + uB2 * 0.16, 0.0, 1.0);
-      float breathe = energy * (0.09 + 0.10 * twinkle) +
-                      band * (0.11 + twinkle * 0.08);
+      float breathe = energy * 0.09 + band * 0.11;
       float wave = sin(aPosition.y * 7.6 + uTime * (0.9 + energy * 1.5)
                        + aSeed.x * 2.1);
-      float ripple = wave * (0.006 + uBurst * 0.070 + energy * 0.035);
+      float ripple = wave * (0.004 + uBurst * 0.070 + energy * 0.035);
       float impulse = uBurst * (0.40 + 0.60 * smoothstep(-0.88, 0.90, aSeed.z));
       float flare = smoothstep(0.20, 1.0, aSeed.x) * energy * 0.14;
-      float radius = 1.0 + aSeed.z * 0.014 + breathe + ripple +
+      float radius = 1.0 + breathe + ripple +
                      impulse * (0.36 + aSeed.x * 0.28 + 0.16 * (aPosition.y * 0.5 + 0.5)) +
                      flare;
 
@@ -266,7 +309,7 @@
                                vec3(0.0, 0.0, 0.0001));
       point += tangent * sin(aSeed.z * 6.2831 + uTime * 0.44 +
                               aPosition.y * 3.2) *
-               (0.005 + uBurst * 0.052 + energy * 0.015);
+               (uBurst * 0.052 + energy * 0.015);
 
       float cy = cos(uYaw);
       float sy = sin(uYaw);
@@ -287,18 +330,12 @@
 
       float depth = smoothstep(-0.76, 0.82, point.z);
       float size = abs(aSize) * uDpr * perspective *
-        (0.90 + band * 0.30 + uLevel * 0.34 + uBurst * 0.22 + twinkle * 0.10);
+        (0.92 + band * 0.26 + uLevel * 0.32 + uBurst * 0.20);
       gl_PointSize = clamp(size, 1.0, 44.0 * uDpr);
-      vColor = aColor * (0.76 + depth * 0.48 + twinkle * 0.16 + uBurst * 0.10);
-      vAlpha = (0.12 + depth * 0.88) *
-               (0.84 + band * 0.16) *
-               (0.86 + 0.14 * twinkle) *
-               (0.62 + 0.38 * uPlaying);
-      if (halo) {
-        gl_PointSize *= 1.7;
-        vAlpha *= 0.24;
-        vColor = mix(vColor, vec3(1.0), 0.14);
-      }
+      vColor = aColor * (0.68 + depth * 0.30 + uBurst * 0.05);
+      vAlpha = (0.14 + depth * 0.86) *
+               (0.86 + band * 0.12) *
+               (0.64 + 0.36 * uPlaying);
       vKind = aKind;
     }
   `;
@@ -314,8 +351,10 @@
       if (d > 1.0) discard;
       float core = pow(1.0 - d, 1.55);
       float halo = exp(-d * 3.5);
-      vec3 color = vColor * (0.70 + core * 0.76);
-      color += vec3(0.10, 0.075, 0.055) * core * core;
+      vec3 color = vColor * (0.82 + core * 0.45);
+      // Keep the highlight inside the cover's own hue instead of washing every
+      // particle toward the same warm white.
+      color += vColor * core * core * 0.12;
       float alpha = vAlpha * (0.14 + core * 0.86);
       if (vKind > 0.5) {
         alpha = vAlpha * halo;
@@ -622,19 +661,29 @@
       color = mixColor(fallback, [30, 16, 22], v * 0.36);
     }
     const average = (color[0] + color[1] + color[2]) / 3;
-    const gain = average < 48 ? 1.55 : average < 92 ? 1.25 : 1.04;
-    const saturation = 1.20;
+    const gain = average < 48 ? 1.62 : average < 92 ? 1.30 : 1.06;
+    const saturation = 1.34;
     let r = average + (color[0] - average) * saturation;
     let g = average + (color[1] - average) * saturation;
     let b = average + (color[2] - average) * saturation;
-    const warm = 0.04 + (1 - v) * 0.05;
-    r = clamp(r * gain + 16 + 40 * warm, 0, 255);
-    g = clamp(g * gain + 12 + 18 * warm, 0, 255);
-    b = clamp(b * gain + 11, 0, 255);
+    const warm = 0.02 + (1 - v) * 0.025;
+    r = clamp(r * gain + 12 + 32 * warm, 0, 255);
+    g = clamp(g * gain + 10 + 14 * warm, 0, 255);
+    b = clamp(b * gain + 10, 0, 255);
     return [r, g, b];
   }
 
+  let artworkSerial = 0;
+  // Keep in-flight decodes rooted. A local Image with no other reference can
+  // be collected before onload, which would silently leave the globe on its
+  // accent fallback instead of the album's own colours.
+  const pendingArtworkImages = new Set();
+
   function setArtworkData(data) {
+    // A decoded cover arrives asynchronously. Ignore an older image if the
+    // track changed while it was decoding, otherwise a fast skip can leave
+    // the new globe painted with the previous song's colours.
+    const request = ++artworkSerial;
     if (!data) {
       state.artwork = null;
       state.pixels = null;
@@ -644,7 +693,10 @@
       return;
     }
     const image = new Image();
+    pendingArtworkImages.add(image);
     image.onload = () => {
+      pendingArtworkImages.delete(image);
+      if (request !== artworkSerial) return;
       state.artwork = image;
       const size = 64;
       const sample = document.createElement("canvas");
@@ -660,17 +712,21 @@
       try {
         pixels = context.getImageData(0, 0, size, size).data;
       } catch (error) {
+        if (request !== artworkSerial) return;
         state.pixels = null;
         rebuildPaletteFromAccent();
         buildOrb();
         buildTide();
         return;
       }
+      if (request !== artworkSerial) return;
       state.pixels = pixels;
       state.pixelSize = size;
       setPaletteFromPixels(pixels);
     };
     image.onerror = () => {
+      pendingArtworkImages.delete(image);
+      if (request !== artworkSerial) return;
       state.artwork = null;
       state.pixels = null;
       rebuildPaletteFromAccent();
@@ -685,53 +741,57 @@
   /* ------------------------------------------------------------------ */
 
   function buildOrb() {
-    const meridians = config.meridians;
-    const count = meridians * RINGS;
+    const rings = config.orbRings;
+    const rowCounts = new Int16Array(rings);
+    let count = 0;
+    for (let ring = 0; ring < rings; ring++) {
+      // Rows are evenly spaced in screen height: y is uniform, so the horizon
+      // and the poles get the same vertical gap. Each row then gets only as
+      // many points as its circumference can hold. The result is a calm,
+      // uniform latitude lattice instead of the old pole-heavy stripes.
+      const y = 1 - 2 * ((ring + 0.5) / rings);
+      const ringRadius = Math.sqrt(Math.max(0, 1 - y * y));
+      const rowCount = Math.max(
+        4,
+        Math.round(config.orbMeridians * ringRadius / 4) * 4
+      );
+      rowCounts[ring] = rowCount;
+      count += rowCount;
+    }
+
     const data = new Float32Array(count * 11);
     let offset = 0;
-    for (let ring = 0; ring < RINGS; ring++) {
-      const v = (ring + 0.5) / RINGS;
-      const basePhi = v * Math.PI;
+    let pointIndex = 0;
+    for (let ring = 0; ring < rings; ring++) {
+      const y = 1 - 2 * ((ring + 0.5) / rings);
+      const ringRadius = Math.sqrt(Math.max(0, 1 - y * y));
+      const meridians = rowCounts[ring];
+      const v = Math.acos(clamp(y, -1, 1)) / Math.PI;
       for (let meridian = 0; meridian < meridians; meridian++) {
-        const baseTheta = ((meridian + 0.5) / meridians) * TAU;
-        const phi = clamp(
-          basePhi + (Math.random() - 0.5) * (Math.PI / RINGS) * 0.62,
-          0.002,
-          Math.PI - 0.002
-        );
-        const theta = baseTheta +
-          (Math.random() - 0.5) * (TAU / meridians) * 0.60;
-        const sinPhi = Math.sin(phi);
-        const x = sinPhi * Math.cos(theta);
-        const y = Math.cos(phi);
-        const z = sinPhi * Math.sin(theta);
+        const index = pointIndex++;
+        const theta = (meridian / meridians) * TAU;
+        const x = Math.cos(theta) * ringRadius;
+        const z = Math.sin(theta) * ringRadius;
 
         // The cover wraps around the sphere without a mirror: screen-left is
         // cover-left at the front, so turning the globe follows the finger.
-        let u = 0.75 - baseTheta / TAU;
+        let u = 0.75 - theta / TAU;
         u -= Math.floor(u);
-        const color = coverInk(u, v, 0.26);
-        const luma = color[0] * 0.299 + color[1] * 0.587 + color[2] * 0.114;
-        const emphasized = meridian % 11 === 0 || ring % 15 === 0;
-        let size = 0.76 + Math.random() * 0.68 + (emphasized ? 0.16 : 0);
-        let kind = 0;
-        if (luma > 136) size += 0.06 + Math.random() * 0.14;
-        if (luma > 142 && Math.random() < config.glint) {
-          kind = 1;
-          size = 1.7 + Math.random() * 1.9;
-        }
-        const shade = 0.85 + Math.random() * 0.30;
+        const color = coverInk(u, v, 0.30);
+
+        // Only the base particles remain: one size, one shade, no random
+        // sparkle. The audio envelope still moves and colours the lattice.
         data[offset++] = x;
         data[offset++] = y;
         data[offset++] = z;
-        data[offset++] = clamp(color[0] * shade / 255, 0, 1);
-        data[offset++] = clamp(color[1] * shade / 255, 0, 1);
-        data[offset++] = clamp(color[2] * shade / 255, 0, 1);
-        data[offset++] = Math.random() * 2 - 1;
-        data[offset++] = Math.random() * 2 - 1;
-        data[offset++] = Math.random() * 2 - 1;
-        data[offset++] = size;
-        data[offset++] = kind;
+        data[offset++] = clamp(color[0] / 255, 0, 1);
+        data[offset++] = clamp(color[1] / 255, 0, 1);
+        data[offset++] = clamp(color[2] / 255, 0, 1);
+        data[offset++] = hash01(index * 5.73 + 0.4) * 2 - 1;
+        data[offset++] = hash01(index * 6.19 + 2.2) * 2 - 1;
+        data[offset++] = hash01(index * 7.31 + 4.8) * 2 - 1;
+        data[offset++] = 1.68;
+        data[offset++] = 0;
       }
     }
     state.orbData = data;
@@ -1082,18 +1142,23 @@
   function startDrag(event) {
     state.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (state.pointers.size === 1) {
+      state.orbitYawVelocity = 0;
       state.drag = {
         id: event.pointerId,
         x: event.clientX,
         y: event.clientY,
+        lastX: event.clientX,
+        lastAt: performance.now(),
         startYaw: activeView().yaw,
         startTilt: activeView().tilt,
+        velocity: 0,
         moved: false
       };
       if (state.effect === EFFECT_ORBIT) state.lastOrbitDragAt = state.time;
     } else if (state.pointers.size === 2) {
       const points = Array.from(state.pointers.values());
       state.drag = null;
+      state.orbitYawVelocity = 0;
       state.pinchDistance = Math.hypot(
         points[0].x - points[1].x,
         points[0].y - points[1].y
@@ -1131,10 +1196,19 @@
     }
     if (!state.drag.moved) return;
     if (state.effect === EFFECT_ORBIT) {
-      // Dragging right turns the visible cover to the right: the globe follows
-      // the finger and never presents a mirrored surface.
-      view.yaw = state.drag.startYaw + dx * 0.0064;
-      view.tilt = clamp(state.drag.startTilt + dy * 0.0034, -0.72, 0.72);
+      // Horizontal distance drives an unbounded yaw, so the globe can be
+      // dragged through a full 360° and beyond. A short flick keeps rotating
+      // briefly after release instead of stopping dead under the finger.
+      const now = performance.now();
+      const stepX = event.clientX - state.drag.lastX;
+      const stepSeconds = Math.max(0.012, Math.min(0.12, (now - state.drag.lastAt) / 1000));
+      const yawStep = stepX * 0.0082;
+      view.yaw = state.drag.startYaw + dx * 0.0082;
+      view.tilt = clamp(state.drag.startTilt + dy * 0.0030, -0.72, 0.72);
+      state.drag.lastX = event.clientX;
+      state.drag.lastAt = now;
+      state.drag.velocity = state.drag.velocity * 0.55 +
+        clamp(yawStep / stepSeconds, -5.5, 5.5) * 0.45;
       state.lastOrbitDragAt = state.time;
     } else {
       view.yaw = clamp(state.drag.startYaw + dx * 0.0046, -1.02, 1.02);
@@ -1154,11 +1228,21 @@
         id: Array.from(state.pointers.keys())[0],
         x: point.x,
         y: point.y,
+        lastX: point.x,
+        lastAt: performance.now(),
         startYaw: activeView().yaw,
         startTilt: activeView().tilt,
+        velocity: 0,
         moved: true
       };
+      state.orbitYawVelocity = 0;
     } else if (state.pointers.size === 0) {
+      if (state.effect === EFFECT_ORBIT && state.drag) {
+        state.orbitYawVelocity = clamp(state.drag.velocity, -5.5, 5.5);
+        state.lastOrbitDragAt = state.time;
+      } else {
+        state.orbitYawVelocity = 0;
+      }
       state.drag = null;
       saveView(state.effect);
     }
@@ -1167,11 +1251,13 @@
   window.addEventListener("pointerdown", event => {
     if (blockedTarget(event.target)) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    boostFrameRate();
     startDrag(event);
   }, { capture: true, passive: true });
 
   window.addEventListener("pointermove", event => {
     if (!state.pointers.has(event.pointerId)) return;
+    boostFrameRate();
     if (event.cancelable) event.preventDefault();
     moveDrag(event);
   }, { capture: true, passive: false });
@@ -1180,6 +1266,7 @@
   window.addEventListener("pointercancel", endDrag, { capture: true, passive: true });
   window.addEventListener("wheel", event => {
     if (blockedTarget(event.target)) return;
+    boostFrameRate();
     event.preventDefault();
     const view = activeView();
     view.zoom = clamp(view.zoom * (event.deltaY > 0 ? 0.94 : 1.06), 0.62, 1.95);
@@ -1257,9 +1344,16 @@
     const gyroResponse = 1 - Math.pow(0.004, dt);
     state.gyroYaw += (state.gyroYawTarget - state.gyroYaw) * gyroResponse;
     state.gyroPitch += (state.gyroPitchTarget - state.gyroPitch) * gyroResponse;
-    if (state.effect === EFFECT_ORBIT && state.time - state.lastOrbitDragAt > 2.2 &&
-      state.time > state.orbitAutoAt) {
-      state.orbitSpin += dt * (0.042 + state.level * 0.10);
+    if (state.effect === EFFECT_ORBIT) {
+      if (!state.drag && state.orbitYawVelocity !== 0) {
+        state.orbitSpin += state.orbitYawVelocity * dt;
+        state.orbitYawVelocity *= Math.pow(0.06, dt);
+        if (Math.abs(state.orbitYawVelocity) < 0.012) state.orbitYawVelocity = 0;
+      }
+      if (!state.drag && state.time - state.lastOrbitDragAt > 2.2 &&
+        state.time > state.orbitAutoAt) {
+        state.orbitSpin += dt * (0.042 + state.level * 0.10);
+      }
     }
   }
 
@@ -1307,7 +1401,9 @@
     const tilt = clamp(baseTilt + view.tilt + state.gyroPitch * 0.45, -0.66, 0.58);
     const yaw = view.yaw + state.orbitSpin + state.gyroYaw * 0.32;
     context.enable(context.BLEND);
-    context.blendFunc(context.SRC_ALPHA, context.ONE);
+    // Normal alpha over the sphere keeps overlapping points from summing into
+    // a white core; the cover's own hues stay readable through the cloud.
+    context.blendFunc(context.SRC_ALPHA, context.ONE_MINUS_SRC_ALPHA);
     context.useProgram(programs.orb);
     context.bindBuffer(context.ARRAY_BUFFER, buffers.orb);
     const stride = 11 * 4;
@@ -1430,13 +1526,14 @@
     if (!state.glPrograms && !initWebgl()) return;
     const elapsed = state.lastFrameAt > 0 ? Math.min(now - state.lastFrameAt, 100) : 0;
     state.lastFrameAt = now;
-    if (frameInterval > 0) {
+    const interval = frameIntervalFor(now);
+    if (interval > 0) {
       state.frameAccumulator += elapsed;
-      if (state.frameAccumulator < frameInterval * 0.92) {
+      if (state.frameAccumulator < interval * 0.92) {
         state.raf = window.requestAnimationFrame(frame);
         return;
       }
-      state.frameAccumulator = Math.max(0, state.frameAccumulator - frameInterval);
+      state.frameAccumulator = Math.max(0, state.frameAccumulator - interval);
     } else {
       state.frameAccumulator = 0;
     }
@@ -1458,7 +1555,8 @@
     if (!state.glPrograms && !initWebgl()) return;
     state.lastTime = 0;
     state.lastFrameAt = 0;
-    state.frameAccumulator = frameInterval;
+    state.frameAccumulator = adaptiveFps ? 0 : frameInterval;
+    boostFrameRate(1000);
     state.raf = window.requestAnimationFrame(frame);
   }
 
@@ -1482,6 +1580,7 @@
     state.effect = next;
     state.pointers.clear();
     state.drag = null;
+    state.orbitYawVelocity = 0;
     state.pinchDistance = 0;
     if (next === EFFECT_ORBIT) state.orbitAutoAt = state.time + 2.4;
     document.body.classList.toggle("mode-tide", next === EFFECT_TIDE);
@@ -1496,6 +1595,7 @@
     view.tilt = 0;
     view.zoom = 1;
     state.orbitSpin = 0;
+    state.orbitYawVelocity = 0;
     state.lastOrbitDragAt = state.time;
     state.orbitAutoAt = state.time + 4.0;
     saveView(state.effect);
@@ -1536,8 +1636,20 @@
     start();
   }
 
+  function setVisible(visible) {
+    state.manualHidden = !visible;
+    state.visible = visible && !document.hidden;
+    if (state.visible) {
+      state.lastTime = 0;
+      state.lastFrameAt = 0;
+      start();
+    } else {
+      stop();
+    }
+  }
+
   document.addEventListener("visibilitychange", () => {
-    state.visible = !document.hidden;
+    state.visible = !state.manualHidden && !document.hidden;
     if (state.visible) {
       state.lastTime = 0;
       state.lastFrameAt = 0;
@@ -1588,6 +1700,9 @@
     setBeatIntensity,
     setGyro,
     clearGyro,
+    setVisible,
+    setFrameRate,
+    boostFrameRate,
     resetView: () => resetView(true),
     getDebug: () => ({
       effect: state.effect,
@@ -1596,7 +1711,7 @@
       orbParticles: state.orbCount,
       tideLineVertices: state.tideLineCount,
       tidePoints: state.tidePointCount,
-      targetFps: targetFps || "unlimited",
+      targetFps: adaptiveFps ? "adaptive" : (targetFps || "unlimited"),
       drawnFrames: state.drawnFrames,
       level: state.level,
       burst: state.burst,

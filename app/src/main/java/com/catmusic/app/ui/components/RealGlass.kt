@@ -63,6 +63,8 @@ fun RealLiquidGlassLayer(
     bevelWidth: Dp? = null,
     dispersion: Float = 0.10f,
     tintArgb: Int = 0,
+    // LiquidGlassView's saturation unit is percent: 100 = unchanged.
+    saturation: Float = 150f,
     sensorSpecular: Boolean = true,
     material: GlassMaterial = GlassMaterial.CLEAR,
     adaptiveLensScale: Boolean = true
@@ -90,8 +92,9 @@ fun RealLiquidGlassLayer(
                 this.cornerRadius = radiusPx
                 if (refractionPx != null) this.refractionHeight = refractionPx
                 if (bevelPx != null) this.bevelWidth = bevelPx
-                this.refractionFalloff = 2f
+                this.refractionFalloff = 1.82f
                 this.dispersionStrength = dispersion
+                this.saturation = saturation
                 this.glassTint = tintArgb
                 post {
                     val nativeBackdrop = GlassBackdrop.current()
@@ -106,6 +109,7 @@ fun RealLiquidGlassLayer(
             if (refractionPx != null) glass.refractionHeight = refractionPx
             if (bevelPx != null) glass.bevelWidth = bevelPx
             glass.dispersionStrength = dispersion
+            glass.saturation = saturation
             glass.glassTint = tintArgb
             glass.material = material
             glass.enableSensorHighlight = sensorSpecular

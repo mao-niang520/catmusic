@@ -4,11 +4,8 @@ import android.graphics.BitmapFactory
 import android.graphics.Color as AndroidColor
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -46,23 +43,29 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -70,6 +73,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -87,18 +94,27 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import com.catmusic.app.R
+import com.catmusic.app.data.AdaptiveMotion
 import com.catmusic.app.data.AudioVisualLevel
+import com.catmusic.app.data.LyricDisplayLoader
 import com.catmusic.app.data.LyricFrameRate
+import com.catmusic.app.data.LyricTranslationMode
 import com.catmusic.app.data.Track
 import com.catmusic.app.playback.AudioEnergy
 import com.catmusic.app.playback.AudioReactiveSignal
+import com.catmusic.app.ui.components.CoverArt
 import com.catmusic.app.ui.components.CoverStage
+import com.catmusic.app.ui.components.GlassDropdownMenu
 import com.catmusic.app.ui.components.ImmersiveLyrics
 import com.catmusic.app.ui.components.LiquidGlassSurface
+import com.catmusic.app.ui.components.LocalAdaptiveMotionNanos
+import com.catmusic.app.ui.components.LocalSceneRipple
+import com.catmusic.app.ui.components.MetaballFluidBackdrop
 import com.catmusic.app.ui.components.PlayerUiSnapshot
 import com.catmusic.app.ui.components.bouncyClickable
 import com.catmusic.app.ui.components.coverPalette
 import com.catmusic.app.ui.theme.CatCream
+import com.catmusic.app.util.ParsedLyrics
 import com.catmusic.app.ui.theme.CatPeach
 import com.catmusic.app.ui.theme.CatTextSecondary
 import com.catmusic.app.ui.theme.CatTextTertiary
@@ -114,6 +130,8 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private data class BackdropDust(
@@ -125,6 +143,20 @@ private data class BackdropDust(
     val drift: Float
 )
 
+private data class FluidBlob(
+    val x: Float,
+    val y: Float,
+    val radius: Float,
+    val stretch: Float,
+    val rotation: Float,
+    val color: Color,
+    val alpha: Float,
+    val driftX: Float,
+    val driftY: Float,
+    val phase: Float
+)
+
+
 /**
  * The player is drawn on top of the library. Without a pointer-input node of
  * its own, taps on empty artwork/background areas fall through to the library
@@ -135,6 +167,7 @@ private fun Modifier.blockPlayerTouches(): Modifier = pointerInput(Unit) {
     awaitPointerEventScope {
         while (true) {
             awaitPointerEvent()
+            AdaptiveMotion.pulse()
         }
     }
 }
@@ -160,6 +193,13 @@ fun NowPlayingScreen(
     onToggleAudioReactive: () -> Unit,
     audioVisualLevel: AudioVisualLevel,
     lyricFrameRate: LyricFrameRate,
+    translationMode: LyricTranslationMode,
+    fadeInMs: Int,
+    fadeOutMs: Int,
+    onFadeInChange: (Int) -> Unit,
+    onFadeOutChange: (Int) -> Unit,
+    desktopLyricsEnabled: Boolean,
+    onToggleDesktopLyrics: () -> Unit,
     sleepTimerRemainingMs: Long,
     onSetSleepTimer: (Int) -> Unit,
     onClearSleepTimer: () -> Unit,
@@ -177,12 +217,40 @@ fun NowPlayingScreen(
     val formatLabel = remember(track?.uri, track?.mimeType) { audioFormatLabel(track) }
     var showLyrics by rememberSaveable { mutableStateOf(false) }
 
+    LaunchedEffect(track?.id, player.isPlaying) {
+        AdaptiveMotion.pulse()
+    }
+
+    // A short fluid ripple under the translucent player menu. It deliberately
+    // interrupts only the relaxing ambient field, not taps or playback.
+    val menuRipple = remember { Animatable(1f) }
+    val menuRippleState = remember(menuRipple) { menuRipple.asState() }
+    val rippleScope = rememberCoroutineScope()
+    val triggerMenuRipple: () -> Unit = {
+        AdaptiveMotion.pulse()
+        rippleScope.launch {
+            menuRipple.snapTo(0f)
+            menuRipple.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(1350, easing = FastOutSlowInEasing)
+            )
+        }
+        Unit
+    }
+
     val handleRequestLyrics: () -> Unit = {
         track?.let {
             showLyrics = true
             onRequestLyrics(it)
         }
         Unit
+    }
+
+    // Turning 音浪 on opens the lyric stage; opening lyrics on its own never
+    // changes the 音浪 preference.
+    val handleToggleAudioReactive: () -> Unit = {
+        if (!audioReactiveOn) showLyrics = true
+        onToggleAudioReactive()
     }
 
     val coverEnter = fadeIn(tween(360, easing = FastOutSlowInEasing)) +
@@ -196,6 +264,7 @@ fun NowPlayingScreen(
         scaleOut(tween(300, easing = FastOutSlowInEasing), targetScale = 0.985f) +
         slideOutVertically(tween(300, easing = FastOutSlowInEasing)) { it / 40 }
 
+    CompositionLocalProvider(LocalSceneRipple provides menuRippleState) {
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -214,11 +283,7 @@ fun NowPlayingScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             Box(Modifier.fillMaxSize()) {
-                CinematicBackdrop(
-                    accent = accent,
-                    isPlaying = player.isPlaying,
-                    effectsEnabled = audioReactiveOn
-                )
+                MetaballFluidBackdrop()
 
                 Column(
                     modifier = Modifier
@@ -239,11 +304,18 @@ fun NowPlayingScreen(
                             track?.let(onOpenTrackInfo)
                         },
                         onRequestLyrics = handleRequestLyrics,
-                        onToggleAudioReactive = onToggleAudioReactive,
+                        onToggleAudioReactive = handleToggleAudioReactive,
                         onToggleOrientation = onToggleOrientation,
+                        desktopLyricsEnabled = desktopLyricsEnabled,
+                        onToggleDesktopLyrics = onToggleDesktopLyrics,
+                        fadeInMs = fadeInMs,
+                        fadeOutMs = fadeOutMs,
+                        onFadeInChange = onFadeInChange,
+                        onFadeOutChange = onFadeOutChange,
                         sleepTimerRemainingMs = sleepTimerRemainingMs,
                         onSetSleepTimer = onSetSleepTimer,
-                        onClearSleepTimer = onClearSleepTimer
+                        onClearSleepTimer = onClearSleepTimer,
+                        onMenuOpened = triggerMenuRipple
                     )
 
                     if (isLandscape) {
@@ -252,7 +324,10 @@ fun NowPlayingScreen(
                             player = player,
                             accent = accent,
                             formatLabel = formatLabel,
+                            durationMs = durationMs,
+                            translationMode = translationMode,
                             effectsEnabled = audioReactiveOn,
+                            onSeek = onSeek,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f)
@@ -278,8 +353,10 @@ fun NowPlayingScreen(
                         isLandscape = isLandscape,
                         showLyrics = showLyrics,
                         audioReactiveOn = audioReactiveOn,
+                        desktopLyricsEnabled = desktopLyricsEnabled,
                         onToggleLyrics = { showLyrics = !showLyrics },
-                        onToggleAudioReactive = onToggleAudioReactive,
+                        onToggleDesktopLyrics = onToggleDesktopLyrics,
+                        onToggleAudioReactive = handleToggleAudioReactive,
                         onSeek = onSeek,
                         onToggle = onToggle,
                         onNext = onNext,
@@ -325,6 +402,7 @@ fun NowPlayingScreen(
                         durationMs = durationMs,
                         audioVisualLevel = audioVisualLevel,
                         frameRate = lyricFrameRate,
+                        translationMode = translationMode,
                         coverAccent = accent,
                         onCloseLyrics = { showLyrics = false },
                         onToggle = onToggle,
@@ -332,7 +410,7 @@ fun NowPlayingScreen(
                         lyricOffsetMs = track?.lyricOffsetMs ?: 0L,
                         onLyricOffsetChange = onLyricOffsetChange,
                         onRequestLyrics = { current -> onRequestLyrics(current) },
-                        onToggleAudioReactive = onToggleAudioReactive,
+                        onToggleAudioReactive = handleToggleAudioReactive,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -344,6 +422,9 @@ fun NowPlayingScreen(
                         isLandscape = isLandscape,
                         durationMs = durationMs,
                         audioReactiveOn = audioReactiveOn,
+                        translationMode = translationMode,
+                        desktopLyricsEnabled = desktopLyricsEnabled,
+                        onToggleDesktopLyrics = onToggleDesktopLyrics,
                         onCloseLyrics = { showLyrics = false },
                         onToggle = onToggle,
                         onSeek = onSeek,
@@ -352,16 +433,22 @@ fun NowPlayingScreen(
                         onRequestArtwork = { track?.let(onRequestArtwork) },
                         onOpenTrackInfo = { track?.let(onOpenTrackInfo) },
                         onRequestLyrics = handleRequestLyrics,
-                        onToggleAudioReactive = onToggleAudioReactive,
+                        onToggleAudioReactive = handleToggleAudioReactive,
                         onToggleOrientation = onToggleOrientation,
+                        fadeInMs = fadeInMs,
+                        fadeOutMs = fadeOutMs,
+                        onFadeInChange = onFadeInChange,
+                        onFadeOutChange = onFadeOutChange,
                         sleepTimerRemainingMs = sleepTimerRemainingMs,
                         onSetSleepTimer = onSetSleepTimer,
                         onClearSleepTimer = onClearSleepTimer,
+                        onMenuOpened = triggerMenuRipple,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
             }
         }
+    }
     }
 }
 
@@ -374,6 +461,9 @@ private fun ImmersiveLyricsScreen(
     isLandscape: Boolean,
     durationMs: Long,
     audioReactiveOn: Boolean,
+    translationMode: LyricTranslationMode,
+    desktopLyricsEnabled: Boolean,
+    onToggleDesktopLyrics: () -> Unit,
     onCloseLyrics: () -> Unit,
     onToggle: () -> Unit,
     onSeek: (Long) -> Unit,
@@ -384,6 +474,11 @@ private fun ImmersiveLyricsScreen(
     onRequestLyrics: () -> Unit,
     onToggleAudioReactive: () -> Unit,
     onToggleOrientation: () -> Unit,
+    fadeInMs: Int,
+    fadeOutMs: Int,
+    onFadeInChange: (Int) -> Unit,
+    onFadeOutChange: (Int) -> Unit,
+    onMenuOpened: () -> Unit,
     sleepTimerRemainingMs: Long,
     onSetSleepTimer: (Int) -> Unit,
     onClearSleepTimer: () -> Unit,
@@ -396,7 +491,15 @@ private fun ImmersiveLyricsScreen(
             .fillMaxSize()
             .blockPlayerTouches()
     ) {
-        LyricsBackdrop(accent = accent)
+        if (isLandscape) {
+            FluidBackdrop(
+                accent = accent,
+                isPlaying = player.isPlaying,
+                effectsEnabled = audioReactiveOn
+            )
+        } else {
+            LyricsBackdrop(accent = accent)
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -415,6 +518,13 @@ private fun ImmersiveLyricsScreen(
                 onRequestLyrics = onRequestLyrics,
                 onToggleAudioReactive = onToggleAudioReactive,
                 onToggleOrientation = onToggleOrientation,
+                onMenuOpened = onMenuOpened,
+                desktopLyricsEnabled = desktopLyricsEnabled,
+                onToggleDesktopLyrics = onToggleDesktopLyrics,
+                fadeInMs = fadeInMs,
+                fadeOutMs = fadeOutMs,
+                onFadeInChange = onFadeInChange,
+                onFadeOutChange = onFadeOutChange,
                 lyricCalibrationEnabled = hasLyrics,
                 lyricOffsetMs = lyricOffsetMs,
                 onOpenLyricCalibration = { showCalibration = true },
@@ -422,21 +532,89 @@ private fun ImmersiveLyricsScreen(
                 onSetSleepTimer = onSetSleepTimer,
                 onClearSleepTimer = onClearSleepTimer
             )
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            ) {
-                ImmersiveLyrics(
-                    track = track,
-                    player = player,
-                    accent = accent,
-                    isLandscape = isLandscape,
-                    offsetMs = lyricOffsetMs,
-                    onSeek = onSeek,
-                    onImportLyrics = onRequestLyrics,
-                    modifier = Modifier.fillMaxSize()
-                )
+            if (isLandscape) {
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    val coverSize = minOf(maxHeight * 0.94f, maxWidth * 0.27f)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 28.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .padding(end = 26.dp)
+                        ) {
+                            Text(
+                                text = track?.title ?: "歌词",
+                                style = MaterialTheme.typography.titleLarge.copy(
+                                    fontSize = 19.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                color = CatCream.copy(alpha = 0.94f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = track?.artist.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                color = Color.White.copy(alpha = 0.40f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f)
+                            ) {
+                                ImmersiveLyrics(
+                                    track = track,
+                                    player = player,
+                                    accent = accent,
+                                    isLandscape = true,
+                                    offsetMs = lyricOffsetMs,
+                                    translationMode = translationMode,
+                                    onSeek = onSeek,
+                                    onImportLyrics = onRequestLyrics,
+                                    leftAligned = true,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
+                        LandscapeCover(
+                            track = track,
+                            accent = accent,
+                            isPlaying = player.isPlaying,
+                            effectsEnabled = audioReactiveOn,
+                            modifier = Modifier.size(coverSize)
+                        )
+                    }
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    ImmersiveLyrics(
+                        track = track,
+                        player = player,
+                        accent = accent,
+                        isLandscape = false,
+                        offsetMs = lyricOffsetMs,
+                        translationMode = translationMode,
+                        onSeek = onSeek,
+                        onImportLyrics = onRequestLyrics,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
             if (showCalibration) {
                 LyricCalibrationBar(
@@ -837,101 +1015,484 @@ private fun LandscapePlayerBody(
     player: PlayerUiSnapshot,
     accent: Color,
     formatLabel: String,
+    durationMs: Long,
+    translationMode: LyricTranslationMode,
     effectsEnabled: Boolean,
+    onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Box(modifier = modifier.fillMaxSize()) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.horizontalGradient(
-                        0f to Color.Black.copy(alpha = 0.14f),
-                        0.32f to Color.Transparent,
-                        0.58f to Color.Black.copy(alpha = 0.22f),
-                        1f to Color.Black.copy(alpha = 0.30f)
-                    )
-                )
-        )
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color.Black.copy(alpha = 0.08f),
-                            Color.Transparent,
-                            Color.Black.copy(alpha = 0.20f)
-                        )
-                    )
-                )
-        )
-
-        // A quiet cover-coloured glow replaces the old sound-field mound;
-        // the blurred artwork and dust already carry the atmosphere.
-        Canvas(Modifier.fillMaxSize()) {
-            val glowCenter = Offset(size.width * 0.64f, size.height * 0.47f)
-            val glowRadius = size.height * 0.72f
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        accent.copy(alpha = 0.11f),
-                        accent.copy(alpha = 0.03f),
-                        Color.Transparent
-                    ),
-                    center = glowCenter,
-                    radius = glowRadius
-                ),
-                radius = glowRadius,
-                center = glowCenter
-            )
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val dense = maxHeight < 245.dp
+        val titleSize = when {
+            maxHeight < 225.dp -> 24.sp
+            maxHeight < 290.dp -> 28.sp
+            else -> 33.sp
         }
+        val coverSize = minOf(maxHeight * 0.95f, maxWidth * 0.34f)
 
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 28.dp),
+                .padding(horizontal = 32.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
+            Column(
                 modifier = Modifier
-                    .weight(0.88f)
+                    .weight(1f)
                     .fillMaxHeight()
-                    .padding(vertical = 4.dp)
+                    .padding(end = 26.dp),
+                verticalArrangement = Arrangement.Center
             ) {
-                CoverStage(
+                LandscapeTrackHeading(
                     track = track,
+                    formatLabel = formatLabel,
                     accent = accent,
-                    isPlaying = player.isPlaying,
-                    effectsEnabled = effectsEnabled,
-                    modifier = Modifier.fillMaxSize()
+                    titleSize = titleSize,
+                    dense = dense
+                )
+                Spacer(Modifier.height(if (dense) 8.dp else 12.dp))
+                LandscapeLyricPreview(
+                    track = track,
+                    positionMs = player.positionMs,
+                    durationMs = durationMs,
+                    translationMode = translationMode,
+                    maxLines = if (dense) 3 else 4,
+                    dense = dense,
+                    accent = accent,
+                    onSeek = onSeek,
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
+            LandscapeCover(
+                track = track,
+                accent = accent,
+                isPlaying = player.isPlaying,
+                effectsEnabled = effectsEnabled,
+                modifier = Modifier.size(coverSize)
+            )
+        }
+    }
+}
 
-            Spacer(Modifier.width(24.dp))
+@Composable
+private fun LandscapeTrackHeading(
+    track: Track?,
+    formatLabel: String,
+    accent: Color,
+    titleSize: androidx.compose.ui.unit.TextUnit,
+    dense: Boolean
+) {
+    val album = track?.album?.takeIf { it.isNotBlank() && it != "未知专辑" }
+    val overline = buildString {
+        if (album != null) {
+            append(album)
+            append("  ·  ")
+        }
+        append(formatLabel.ifBlank { "本地音乐" })
+    }
+    val shadow = Shadow(
+        color = Color.Black.copy(alpha = 0.45f),
+        offset = Offset(0f, 2f),
+        blurRadius = 16f
+    )
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            text = overline.uppercase(),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 9.sp,
+                letterSpacing = 1.7.sp,
+                fontWeight = FontWeight.SemiBold
+            ),
+            color = accent.copy(alpha = 0.80f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(Modifier.height(if (dense) 4.dp else 6.dp))
+        Text(
+            text = track?.title ?: "还没有正在播放的歌曲",
+            style = MaterialTheme.typography.headlineLarge.copy(
+                fontSize = titleSize,
+                lineHeight = (titleSize.value * 1.08f).sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = (-0.6).sp,
+                shadow = shadow
+            ),
+            color = CatCream.copy(alpha = 0.97f),
+            maxLines = if (dense) 1 else 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(Modifier.height(5.dp))
+        Text(
+            text = track?.artist ?: "从音乐馆选择一首歌",
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = if (dense) 12.sp else 13.sp,
+                fontWeight = FontWeight.Medium,
+                shadow = shadow
+            ),
+            color = Color.White.copy(alpha = 0.50f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(Modifier.height(if (dense) 6.dp else 9.dp))
+        Box(
+            Modifier
+                .width(if (dense) 26.dp else 34.dp)
+                .height(1.dp)
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(accent.copy(alpha = 0.72f), Color.Transparent)
+                    )
+                )
+        )
+    }
+}
 
-            Box(
-                modifier = Modifier
-                    .weight(1.12f)
-                    .fillMaxHeight()
+/**
+ * A live left-hand lyric rail for the cover page. It only reads the local
+ * lyric file (no online translation is triggered here) and keeps the current
+ * line plus its neighbours visible instead of duplicating the full stage.
+ */
+@Composable
+private fun LandscapeLyricPreview(
+    track: Track?,
+    positionMs: Long,
+    durationMs: Long,
+    translationMode: LyricTranslationMode,
+    maxLines: Int,
+    dense: Boolean,
+    accent: Color,
+    onSeek: (Long) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val parsed by produceState<ParsedLyrics?>(
+        initialValue = null,
+        track?.lyricsFile,
+        translationMode
+    ) {
+        value = LyricDisplayLoader.load(context, track, translationMode)
+    }
+    val lyrics = parsed
+    if (lyrics == null || lyrics.lines.isEmpty()) {
+        if (!track?.lyricsFile.isNullOrBlank()) {
+            Spacer(modifier.height(if (dense) 34.dp else 44.dp))
+        } else {
+            Row(
+                modifier = modifier.height(if (dense) 34.dp else 44.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(
+                Box(
+                    Modifier
+                        .size(4.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.22f))
+                )
+                Spacer(Modifier.width(9.dp))
+                Text(
+                    text = "轻触下方「词」载入歌词",
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+                    color = Color.White.copy(alpha = 0.30f)
+                )
+            }
+        }
+        return
+    }
+
+    val offsetMs = track?.lyricOffsetMs ?: 0L
+    val active = lyrics.activeIndex(
+        (positionMs - offsetMs).coerceAtLeast(0L)
+    )
+    val maxIndex = lyrics.lines.lastIndex
+    var selectedIndex by remember(track?.id, translationMode) {
+        mutableStateOf<Int?>(null)
+    }
+    var isDragging by remember(track?.id, translationMode) {
+        mutableStateOf(false)
+    }
+    var isTouching by remember(track?.id, translationMode) {
+        mutableStateOf(false)
+    }
+    val latestSelected = rememberUpdatedState(selectedIndex)
+    val latestActive = rememberUpdatedState(if (active < 0) 0 else active)
+    val latestOffset = rememberUpdatedState(offsetMs)
+    val latestDuration = rememberUpdatedState(durationMs)
+    val latestOnSeek = rememberUpdatedState(onSeek)
+
+    LaunchedEffect(maxIndex) {
+        selectedIndex = selectedIndex?.coerceIn(0, maxIndex)
+    }
+
+    // A drag previews a lyric without touching playback. The preview quietly
+    // yields back to the live position after three seconds unless the user
+    // taps it, and only that tap commits the seek.
+    LaunchedEffect(selectedIndex, isDragging, isTouching) {
+        val selected = selectedIndex ?: return@LaunchedEffect
+        // Keep the preview alive while a finger is on it, so a tap that lands
+        // just before the deadline is not swallowed by the countdown.
+        if (!isDragging && !isTouching) {
+            delay(3_000L)
+            if (selectedIndex == selected) selectedIndex = null
+        }
+    }
+
+    val seekModifier = if (lyrics.hasTiming) {
+        Modifier.pointerInput(lyrics, dense) {
+            val lineStep = (if (dense) 30.dp else 36.dp).toPx().coerceAtLeast(1f)
+            val tapSlop = viewConfiguration.touchSlop.coerceAtLeast(6f)
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                isTouching = true
+                val initialSelection = latestSelected.value
+                val startIndex = (initialSelection ?: latestActive.value)
+                    .coerceIn(0, maxIndex)
+                var dragging = false
+                try {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                            ?: break
+                        if (change.pressed) {
+                            val dx = change.position.x - down.position.x
+                            val dy = change.position.y - down.position.y
+                            if (!dragging &&
+                                abs(dy) > tapSlop &&
+                                abs(dy) > abs(dx)
+                            ) {
+                                dragging = true
+                                isDragging = true
+                                selectedIndex = initialSelection ?: startIndex
+                            }
+                            if (dragging) {
+                                // Swipe up for later lyrics, down for earlier.
+                                val steps = (-dy / lineStep).roundToInt()
+                                val target = (startIndex + steps).coerceIn(0, maxIndex)
+                                if (selectedIndex != target) selectedIndex = target
+                                change.consume()
+                            }
+                        } else {
+                            if (dragging) {
+                                change.consume()
+                            } else {
+                                val stayed = abs(change.position.x - down.position.x) <= tapSlop &&
+                                    abs(change.position.y - down.position.y) <= tapSlop
+                                val chosen = latestSelected.value
+                                if (stayed && chosen != null) {
+                                    lyrics.lines.getOrNull(chosen)?.let { line ->
+                                        val raw = (line.timeMs + latestOffset.value)
+                                            .coerceAtLeast(0L)
+                                        val target = if (latestDuration.value > 0L) {
+                                            raw.coerceAtMost(latestDuration.value)
+                                        } else {
+                                            raw
+                                        }
+                                        latestOnSeek.value(target)
+                                    }
+                                    selectedIndex = null
+                                    change.consume()
+                                }
+                            }
+                            break
+                        }
+                    }
+                } finally {
+                    if (dragging) isDragging = false
+                    isTouching = false
+                }
+            }
+        }
+    } else {
+        Modifier
+    }
+
+    val highlighted = selectedIndex ?: (if (active < 0) 0 else active)
+    val anchor = highlighted.coerceIn(0, maxIndex)
+    val count = minOf(maxLines, lyrics.lines.size)
+    val start = (anchor - (count - 1) / 2)
+        .coerceIn(0, (lyrics.lines.size - count).coerceAtLeast(0))
+    val activeSize = if (dense) 17.5.sp else 20.sp
+    val idleSize = if (dense) 12.sp else 13.5.sp
+    val glow = Shadow(
+        color = Color.White.copy(alpha = 0.32f),
+        offset = Offset.Zero,
+        blurRadius = 24f
+    )
+    val selectedLine = selectedIndex?.let { lyrics.lines.getOrNull(it) }
+    val selectedTimeMs = selectedLine?.let { line ->
+        val raw = (line.timeMs + offsetMs).coerceAtLeast(0L)
+        if (durationMs > 0L) raw.coerceAtMost(durationMs) else raw
+    }
+
+    Box(modifier.then(seekModifier)) {
+        Column(Modifier.fillMaxWidth()) {
+            if (selectedIndex != null && selectedTimeMs != null) {
+                Row(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 22.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.Center
+                        .fillMaxWidth()
+                        .height(if (dense) 21.dp else 24.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TrackMeta(
-                        track = track,
-                        formatLabel = formatLabel,
-                        accent = accent,
-                        centered = false,
-                        compact = true,
+                    Text(
+                        text = formatClock(selectedTimeMs),
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontSize = if (dense) 15.sp else 17.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.2.sp
+                        ),
+                        color = accent
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        text = if (isDragging) {
+                            "上滑快进 · 下滑回退"
+                        } else {
+                            "点击跳转"
+                        },
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = if (dense) 9.sp else 10.sp
+                        ),
+                        color = Color.White.copy(alpha = 0.48f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.weight(1f))
+                    if (!isDragging) {
+                        Text(
+                            text = "3 秒后返回",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = if (dense) 8.5.sp else 9.5.sp
+                            ),
+                            color = Color.White.copy(alpha = 0.28f),
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+            for (index in start until start + count) {
+                val line = lyrics.lines[index]
+                val isActive = index == highlighted
+                Text(
+                    text = line.text,
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontSize = if (isActive) activeSize else idleSize,
+                        lineHeight = if (isActive) {
+                            (activeSize.value * 1.24f).sp
+                        } else {
+                            (idleSize.value * 1.30f).sp
+                        },
+                        fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                        letterSpacing = 0.2.sp,
+                        shadow = if (isActive) glow else null
+                    ),
+                    color = if (isActive) {
+                        Color(0xFFFFFBF6)
+                    } else {
+                        Color.White.copy(alpha = if (index < highlighted) 0.26f else 0.40f)
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (isActive && !line.translation.isNullOrBlank()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = line.translation.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = if (dense) 10.sp else 11.sp,
+                            lineHeight = if (dense) 13.sp else 14.sp
+                        ),
+                        color = Color.White.copy(alpha = 0.56f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+                Spacer(Modifier.height(if (isActive) 5.dp else 4.dp))
             }
+        }
+    }
+}
+
+@Composable
+private fun LandscapeCover(
+    track: Track?,
+    accent: Color,
+    isPlaying: Boolean,
+    effectsEnabled: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val corner = RoundedCornerShape(26.dp)
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        accent.copy(alpha = 0.16f),
+                        accent.copy(alpha = 0.04f),
+                        accent.copy(alpha = 0f)
+                    ),
+                    center = center,
+                    radius = size.minDimension * 0.62f
+                ),
+                radius = size.minDimension * 0.62f,
+                center = center
+            )
+            drawCircle(
+                color = Color.White.copy(alpha = 0.065f),
+                radius = size.minDimension * 0.475f,
+                center = center,
+                style = Stroke(width = 1.dp.toPx())
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize(0.94f)
+                .shadow(
+                    elevation = 28.dp,
+                    shape = corner,
+                    ambientColor = Color.Black,
+                    spotColor = Color.Black
+                )
+                .clip(corner)
+                .background(Color(0xFF0A0B0D))
+                .border(1.dp, Color.White.copy(alpha = 0.14f), corner)
+                .graphicsLayer {
+                    val audio = if (isPlaying && effectsEnabled) {
+                        AudioReactiveSignal.current
+                    } else {
+                        AudioEnergy()
+                    }
+                    val scale = 1f +
+                        (if (audio.active) audio.level else 0f) * 0.014f +
+                        (if (audio.active) audio.beat else 0f) * 0.011f
+                    scaleX = scale
+                    scaleY = scale
+                }
+        ) {
+            CoverArt(
+                artworkFile = track?.artworkFile,
+                seed = track?.id ?: "catmusic",
+                cornerRadius = 26.dp,
+                showBorder = false,
+                modifier = Modifier.fillMaxSize()
+            )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.White.copy(alpha = 0.045f),
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.18f)
+                            )
+                        )
+                    )
+            )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .border(1.dp, Color.White.copy(alpha = 0.075f), corner)
+            )
         }
     }
 }
@@ -946,6 +1507,7 @@ private fun CinematicBackdrop(
     // the liquid-glass lens can actually refract them. This layer stays fully
     // transparent and only adds a whisper of accent light plus the existing
     // audio-reactive dust on top.
+    val sceneRipple = LocalSceneRipple.current
     Box(Modifier.fillMaxSize()) {
         Canvas(Modifier.fillMaxSize()) {
             drawCircle(
@@ -973,6 +1535,7 @@ private fun CinematicBackdrop(
                     radius = size.maxDimension * 0.72f
                 )
             )
+            drawSceneRipple(accent = accent, progress = sceneRipple.value)
         }
         BackdropDust(
             isPlaying = isPlaying,
@@ -981,6 +1544,206 @@ private fun CinematicBackdrop(
             modifier = Modifier.fillMaxSize()
         )
     }
+}
+
+/**
+ * The landscape scene: a very slow, dark gradient fluid rather than a blurred
+ * copy of the artwork. Large teal, slate and accent colour fields drift into
+ * one another with no hard rings or road lines, so the cover and the glass
+ * controls sit in a calm, continuous surface.
+ */
+@Composable
+private fun FluidBackdrop(
+    accent: Color,
+    isPlaying: Boolean,
+    effectsEnabled: Boolean
+) {
+    val motionNanos = LocalAdaptiveMotionNanos.current
+    val sceneRipple = LocalSceneRipple.current
+    val blobs = remember(accent) {
+        listOf(
+            FluidBlob(
+                x = 0.12f, y = 0.34f, radius = 0.62f, stretch = 0.68f,
+                rotation = -16f, color = Color(0xFF3B8A87), alpha = 0.25f,
+                driftX = 0.028f, driftY = 0.035f, phase = 0f
+            ),
+            FluidBlob(
+                x = 0.61f, y = 0.18f, radius = 0.50f, stretch = 0.78f,
+                rotation = 24f, color = Color(0xFF59696C), alpha = 0.21f,
+                driftX = 0.035f, driftY = 0.022f, phase = 1.9f
+            ),
+            FluidBlob(
+                x = 0.79f, y = 0.70f, radius = 0.47f, stretch = 0.70f,
+                rotation = -8f, color = accent, alpha = 0.19f,
+                driftX = 0.026f, driftY = 0.030f, phase = 3.4f
+            ),
+            FluidBlob(
+                x = 0.44f, y = 0.91f, radius = 0.50f, stretch = 0.56f,
+                rotation = 12f, color = Color(0xFFB3DCD5), alpha = 0.075f,
+                driftX = 0.040f, driftY = 0.018f, phase = 5.1f
+            ),
+            FluidBlob(
+                x = 0.92f, y = 0.16f, radius = 0.34f, stretch = 0.86f,
+                rotation = 38f, color = Color(0xFF1D5E5E), alpha = 0.26f,
+                driftX = 0.020f, driftY = 0.028f, phase = 2.7f
+            ),
+            FluidBlob(
+                x = 0.30f, y = 0.56f, radius = 0.30f, stretch = 1.10f,
+                rotation = -30f, color = Color(0xFF7E8F90), alpha = 0.10f,
+                driftX = 0.032f, driftY = 0.024f, phase = 4.3f
+            )
+        )
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        Canvas(Modifier.fillMaxSize()) {
+            val width = size.width
+            val height = size.height
+            val audio = if (isPlaying && effectsEnabled) {
+                AudioReactiveSignal.current
+            } else {
+                AudioEnergy()
+            }
+            val level = if (audio.active) audio.level else 0f
+            val bass = if (audio.active) audio.bass else 0f
+            val twoPi = 2f * PI.toFloat()
+            val seconds = motionNanos.value / 1_000_000_000f
+            val drift = (seconds / 42f) % 1f
+            val breathe = 0.5f + 0.5f * sin(seconds * twoPi / 22f)
+            val phase = drift * twoPi
+
+            drawRect(
+                brush = Brush.linearGradient(
+                    0f to Color(0xFF061114),
+                    0.46f to Color(0xFF0A1D1F),
+                    1f to Color(0xFF040809),
+                    start = Offset(0f, 0f),
+                    end = Offset(width, height)
+                )
+            )
+
+            // A broad, almost imperceptible light wash keeps the base gradient
+            // moving even between the slower colour-field drifts.
+            val wash = 0.5f + 0.5f * sin(seconds * twoPi / 54f)
+            drawRect(
+                brush = Brush.linearGradient(
+                    listOf(
+                        accent.copy(alpha = 0f),
+                        accent.copy(alpha = 0.05f),
+                        accent.copy(alpha = 0f)
+                    ),
+                    start = Offset(width * (0.08f + wash * 0.20f), 0f),
+                    end = Offset(width * (0.60f + wash * 0.18f), height)
+                )
+            )
+
+            // Big, soft colour fields. A radial brush is squashed into an oval
+            // so the edge is genuinely transparent instead of a hard clip.
+            blobs.forEach { blob ->
+                val localPhase = phase + blob.phase
+                val center = Offset(
+                    width * (blob.x + sin(localPhase) * blob.driftX),
+                    height * (blob.y + cos(localPhase * 0.83f) * blob.driftY)
+                )
+                val radius = size.maxDimension * blob.radius *
+                    (1f + level * 0.045f + bass * 0.018f + breathe * 0.016f)
+                val alpha = (blob.alpha *
+                    (0.84f + breathe * 0.10f + level * 0.22f + bass * 0.08f))
+                    .coerceIn(0f, 0.40f)
+                withTransform({
+                    translate(center.x, center.y)
+                    rotate(blob.rotation + sin(localPhase) * 4.5f, Offset.Zero)
+                    scale(1f, blob.stretch, Offset.Zero)
+                }) {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                blob.color.copy(alpha = alpha),
+                                blob.color.copy(alpha = alpha * 0.42f),
+                                blob.color.copy(alpha = 0f)
+                            ),
+                            center = Offset.Zero,
+                            radius = radius
+                        ),
+                        radius = radius,
+                        center = Offset.Zero
+                    )
+                }
+            }
+
+            // No hard rings or road strokes: the motion should read as one
+            // continuous gradient rather than a graphic layer.
+            // Keep the typography readable at the edges while leaving the
+            // centre alive.
+            drawRect(
+                brush = Brush.horizontalGradient(
+                    0f to Color.Black.copy(alpha = 0.30f),
+                    0.34f to Color.Transparent,
+                    0.82f to Color.Transparent,
+                    1f to Color.Black.copy(alpha = 0.16f)
+                )
+            )
+            drawRect(
+                brush = Brush.verticalGradient(
+                    0f to Color.Black.copy(alpha = 0.30f),
+                    0.24f to Color.Transparent,
+                    0.78f to Color.Transparent,
+                    1f to Color.Black.copy(alpha = 0.40f)
+                )
+            )
+            drawRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.28f)),
+                    center = Offset(width * 0.58f, height * 0.46f),
+                    radius = size.maxDimension * 0.76f
+                )
+            )
+            drawSceneRipple(accent = accent, progress = sceneRipple.value)
+        }
+        BackdropDust(
+            isPlaying = isPlaying,
+            effectsEnabled = effectsEnabled,
+            accent = accent,
+            modifier = Modifier.fillMaxSize()
+        )
+    }
+}
+
+/**
+ * A short, soft disturbance of the fluid when the player menu opens. It reads
+ * as a liquid surface being tapped rather than as another permanent effect.
+ */
+private fun DrawScope.drawSceneRipple(accent: Color, progress: Float) {
+    if (progress >= 0.999f) return
+    val p = progress.coerceIn(0f, 1f)
+    val fade = (1f - p) * (1f - p)
+    val origin = Offset(size.width * 0.87f, size.height * 0.14f)
+    val radius = size.minDimension * (0.035f + p * 0.78f)
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.15f * fade),
+                accent.copy(alpha = 0.10f * fade),
+                accent.copy(alpha = 0f)
+            ),
+            center = origin,
+            radius = radius
+        ),
+        radius = radius,
+        center = origin
+    )
+    drawCircle(
+        color = Color.White.copy(alpha = 0.28f * fade),
+        radius = radius,
+        center = origin,
+        style = Stroke(width = (0.6f + 2.2f * fade).dp.toPx())
+    )
+    drawCircle(
+        color = accent.copy(alpha = 0.20f * fade),
+        radius = radius * 1.22f,
+        center = origin,
+        style = Stroke(width = (0.4f + 1.2f * fade).dp.toPx())
+    )
 }
 
 @Composable
@@ -1003,19 +1766,11 @@ private fun BackdropDust(
             )
         }
     }
-    val transition = rememberInfiniteTransition(label = "backdropDust")
-    val time by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(64_000, easing = LinearEasing),
-            repeatMode = androidx.compose.animation.core.RepeatMode.Restart
-        ),
-        label = "backdropDustTime"
-    )
+    val motionNanos = LocalAdaptiveMotionNanos.current
     val twoPi = 2f * PI.toFloat()
 
     Canvas(modifier) {
+        val time = (motionNanos.value / 1_000_000_000f / 64f) % 1f
         val audio = if (isPlaying && effectsEnabled) {
             AudioReactiveSignal.current
         } else {
@@ -1062,6 +1817,13 @@ private fun PlayerTopBar(
     onRequestLyrics: () -> Unit,
     onToggleAudioReactive: () -> Unit,
     onToggleOrientation: () -> Unit,
+    desktopLyricsEnabled: Boolean,
+    onToggleDesktopLyrics: () -> Unit,
+    fadeInMs: Int,
+    fadeOutMs: Int,
+    onFadeInChange: (Int) -> Unit,
+    onFadeOutChange: (Int) -> Unit,
+    onMenuOpened: () -> Unit = {},
     lyricCalibrationEnabled: Boolean = false,
     lyricOffsetMs: Long = 0L,
     onOpenLyricCalibration: (() -> Unit)? = null,
@@ -1071,6 +1833,7 @@ private fun PlayerTopBar(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     var showSleepDialog by rememberSaveable { mutableStateOf(false) }
+    var showFadeDialog by rememberSaveable { mutableStateOf(false) }
     val controlSize = if (isLandscape) 36.dp else 42.dp
     Row(
         modifier = Modifier
@@ -1096,9 +1859,10 @@ private fun PlayerTopBar(
                     text = "NOW PLAYING",
                     style = MaterialTheme.typography.labelSmall.copy(
                         letterSpacing = 2.8.sp,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        shadow = PlayerMenuTextShadow
                     ),
-                    color = Color.White.copy(alpha = 0.60f)
+                    color = Color.White.copy(alpha = 0.72f)
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
@@ -1107,11 +1871,13 @@ private fun PlayerTopBar(
                     } else {
                         "本地音乐 · $formatLabel"
                     },
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        shadow = PlayerMenuTextShadow
+                    ),
                     color = if (sleepTimerRemainingMs > 0L) {
-                        CatPeach.copy(alpha = 0.78f)
+                        CatPeach.copy(alpha = 0.86f)
                     } else {
-                        Color.White.copy(alpha = 0.30f)
+                        Color.White.copy(alpha = 0.42f)
                     }
                 )
             }
@@ -1124,21 +1890,16 @@ private fun PlayerTopBar(
                 size = controlSize,
                 iconSize = if (isLandscape) 17.dp else 20.dp,
                 subtle = minimal,
-                onClick = { menuExpanded = true }
+                onClick = {
+                    menuExpanded = true
+                    onMenuOpened()
+                }
             )
-            MaterialTheme(
-                colorScheme = MaterialTheme.colorScheme.copy(
-                    surface = Color(0xFF121315),
-                    surfaceTint = Color.Transparent
-                )
-            ) {
-            DropdownMenu(
+            GlassDropdownMenu(
                 expanded = menuExpanded,
                 onDismissRequest = { menuExpanded = false },
-                modifier = Modifier
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(Color(0xFF121315))
-                    .widthIn(min = 232.dp)
+                revealBackdrop = true,
+                modifier = Modifier.widthIn(min = 232.dp)
             ) {
                 DropdownMenuItem(
                     text = { PlayerMenuLabel("更换专辑封面") },
@@ -1184,17 +1945,16 @@ private fun PlayerTopBar(
                             PlayerMenuIcon(R.drawable.ic_lyrics)
                         },
                         trailingIcon = {
-                            Text(
+                            PlayerMenuValue(
                                 text = if (lyricOffsetMs == 0L) {
                                     "未校准"
                                 } else {
                                     formatLyricOffset(lyricOffsetMs)
                                 },
-                                style = MaterialTheme.typography.labelSmall,
                                 color = if (lyricOffsetMs == 0L) {
-                                    Color.White.copy(alpha = 0.30f)
+                                    Color.White.copy(alpha = 0.38f)
                                 } else {
-                                    Color.White.copy(alpha = 0.72f)
+                                    Color.White.copy(alpha = 0.78f)
                                 }
                             )
                         },
@@ -1211,17 +1971,16 @@ private fun PlayerTopBar(
                         PlayerMenuIcon(R.drawable.ic_timer)
                     },
                     trailingIcon = {
-                        Text(
+                        PlayerMenuValue(
                             text = if (sleepTimerRemainingMs > 0L) {
                                 formatSleepTimerRemaining(sleepTimerRemainingMs)
                             } else {
                                 "关"
                             },
-                            style = MaterialTheme.typography.labelSmall,
                             color = if (sleepTimerRemainingMs > 0L) {
                                 CatPeach
                             } else {
-                                Color.White.copy(alpha = 0.34f)
+                                Color.White.copy(alpha = 0.42f)
                             }
                         )
                     },
@@ -1231,24 +1990,60 @@ private fun PlayerTopBar(
                     }
                 )
                 DropdownMenuItem(
+                    text = { PlayerMenuLabel("播放渐入 / 渐出") },
+                    leadingIcon = {
+                        PlayerMenuIcon(R.drawable.ic_play)
+                    },
+                    trailingIcon = {
+                        PlayerMenuValue(
+                            text = "${formatFadeShort(fadeInMs)} / ${formatFadeShort(fadeOutMs)}",
+                            color = Color.White.copy(alpha = 0.62f)
+                        )
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        showFadeDialog = true
+                    }
+                )
+                DropdownMenuItem(
                     text = { PlayerMenuLabel("音浪联动") },
                     leadingIcon = {
                         PlayerMenuIcon(R.drawable.ic_chart)
                     },
                     trailingIcon = {
-                        Text(
+                        PlayerMenuValue(
                             text = if (audioReactiveOn) "开" else "关",
-                            style = MaterialTheme.typography.labelSmall,
                             color = if (audioReactiveOn) {
-                                Color.White.copy(alpha = 0.72f)
+                                Color.White.copy(alpha = 0.78f)
                             } else {
-                                Color.White.copy(alpha = 0.34f)
+                                Color.White.copy(alpha = 0.42f)
                             }
                         )
                     },
                     onClick = {
                         menuExpanded = false
                         onToggleAudioReactive()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { PlayerMenuLabel("桌面歌词") },
+                    leadingIcon = {
+                        PlayerMenuIcon(R.drawable.ic_desktop_lyrics)
+                    },
+                    trailingIcon = {
+                        PlayerMenuValue(
+                            text = if (desktopLyricsEnabled) "开" else "关",
+                            color = if (desktopLyricsEnabled) {
+                                Color.White.copy(alpha = 0.78f)
+                            } else {
+                                Color.White.copy(alpha = 0.42f)
+                            }
+                        )
+                    },
+                    enabled = track != null,
+                    onClick = {
+                        menuExpanded = false
+                        onToggleDesktopLyrics()
                     }
                 )
                 DropdownMenuItem(
@@ -1266,7 +2061,6 @@ private fun PlayerTopBar(
                     }
                 )
             }
-            }
         }
     }
     if (showSleepDialog) {
@@ -1281,6 +2075,15 @@ private fun PlayerTopBar(
                 showSleepDialog = false
                 onClearSleepTimer()
             }
+        )
+    }
+    if (showFadeDialog) {
+        PlaybackFadeDialog(
+            fadeInMs = fadeInMs,
+            fadeOutMs = fadeOutMs,
+            onFadeInChange = onFadeInChange,
+            onFadeOutChange = onFadeOutChange,
+            onDismiss = { showFadeDialog = false }
         )
     }
 }
@@ -1317,12 +2120,27 @@ private fun CircleAction(
     }
 }
 
+private val PlayerMenuTextShadow = Shadow(
+    color = Color.Black.copy(alpha = 0.62f),
+    offset = Offset(0f, 1f),
+    blurRadius = 7f
+)
+
 @Composable
 private fun PlayerMenuLabel(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.bodyMedium,
-        color = Color.White.copy(alpha = 0.86f)
+        style = MaterialTheme.typography.bodyMedium.copy(shadow = PlayerMenuTextShadow),
+        color = Color.White.copy(alpha = 0.90f)
+    )
+}
+
+@Composable
+private fun PlayerMenuValue(text: String, color: Color) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall.copy(shadow = PlayerMenuTextShadow),
+        color = color
     )
 }
 
@@ -1334,6 +2152,163 @@ private fun PlayerMenuIcon(iconRes: Int) {
         tint = Color.White.copy(alpha = 0.55f),
         modifier = Modifier.size(19.dp)
     )
+}
+
+private fun formatFadeShort(milliseconds: Int): String {
+    if (milliseconds <= 0) return "关"
+    val tenths = (milliseconds.coerceAtMost(2_000) / 100)
+    return if (tenths % 10 == 0) {
+        "${tenths / 10}s"
+    } else {
+        "${tenths / 10}.${tenths % 10}s"
+    }
+}
+
+private fun formatFadeValue(milliseconds: Float): String {
+    val safe = milliseconds.roundToInt().coerceIn(0, 2_000)
+    if (safe == 0) return "关闭"
+    val whole = safe / 1_000
+    val tenth = (safe % 1_000) / 100
+    return if (tenth == 0) "$whole 秒" else "$whole.$tenth 秒"
+}
+
+private fun snapFadeValue(value: Float): Float =
+    ((value / 100f).roundToInt() * 100f).coerceIn(0f, 2_000f)
+
+@Composable
+private fun PlaybackFadeDialog(
+    fadeInMs: Int,
+    fadeOutMs: Int,
+    onFadeInChange: (Int) -> Unit,
+    onFadeOutChange: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var fadeInDraft by remember(fadeInMs) { mutableStateOf(fadeInMs.toFloat()) }
+    var fadeOutDraft by remember(fadeOutMs) { mutableStateOf(fadeOutMs.toFloat()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF17121D),
+        titleContentColor = CatCream,
+        textContentColor = CatTextSecondary,
+        shape = RoundedCornerShape(26.dp),
+        title = {
+            Text(
+                text = "播放渐入 / 渐出",
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.SemiBold
+                )
+            )
+        },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    text = "控制 App 内播放和暂停时的音量过渡。设为 0 秒即关闭；调整结果会立即记住。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CatTextTertiary,
+                    lineHeight = 18.sp
+                )
+                Spacer(Modifier.height(16.dp))
+                FadeSliderRow(
+                    label = "渐入",
+                    value = fadeInDraft,
+                    accent = CatPeach,
+                    onValueChange = { fadeInDraft = snapFadeValue(it) },
+                    onValueChangeFinished = {
+                        onFadeInChange(fadeInDraft.roundToInt().coerceIn(0, 2_000))
+                    }
+                )
+                Spacer(Modifier.height(14.dp))
+                FadeSliderRow(
+                    label = "渐出",
+                    value = fadeOutDraft,
+                    accent = CatPeach,
+                    onValueChange = { fadeOutDraft = snapFadeValue(it) },
+                    onValueChangeFinished = {
+                        onFadeOutChange(fadeOutDraft.roundToInt().coerceIn(0, 2_000))
+                    }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("完成", color = CatPeach)
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    fadeInDraft = 500f
+                    fadeOutDraft = 300f
+                    onFadeInChange(500)
+                    onFadeOutChange(300)
+                }
+            ) {
+                Text("恢复默认", color = CatTextTertiary, fontSize = 12.sp)
+            }
+        }
+    )
+}
+
+@Composable
+private fun FadeSliderRow(
+    label: String,
+    value: Float,
+    accent: Color,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleSmall.copy(
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            ),
+            color = CatCream
+        )
+        Spacer(Modifier.weight(1f))
+        Text(
+            text = formatFadeValue(value),
+            style = MaterialTheme.typography.labelLarge.copy(
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            ),
+            color = if (value <= 0f) CatTextTertiary else accent
+        )
+    }
+    Slider(
+        value = value,
+        onValueChange = onValueChange,
+        onValueChangeFinished = onValueChangeFinished,
+        valueRange = 0f..2_000f,
+        steps = 19,
+        colors = SliderDefaults.colors(
+            thumbColor = accent,
+            activeTrackColor = accent.copy(alpha = 0.82f),
+            inactiveTrackColor = Color.White.copy(alpha = 0.13f),
+            activeTickColor = Color.Transparent,
+            inactiveTickColor = Color.Transparent
+        )
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = "关闭",
+            style = MaterialTheme.typography.labelSmall,
+            color = CatTextTertiary.copy(alpha = 0.6f)
+        )
+        Text(
+            text = "2 秒",
+            style = MaterialTheme.typography.labelSmall,
+            color = CatTextTertiary.copy(alpha = 0.6f)
+        )
+    }
 }
 
 @Composable
@@ -1621,7 +2596,9 @@ private fun PlayerDock(
     isLandscape: Boolean,
     showLyrics: Boolean,
     audioReactiveOn: Boolean,
+    desktopLyricsEnabled: Boolean,
     onToggleLyrics: () -> Unit,
+    onToggleDesktopLyrics: () -> Unit,
     onToggleAudioReactive: () -> Unit,
     onSeek: (Long) -> Unit,
     onToggle: () -> Unit,
@@ -1662,57 +2639,65 @@ private fun PlayerDock(
     ) {
         Column(Modifier.fillMaxWidth()) {
         if (isLandscape) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                DockSeekRow(
-                    isLandscape = true,
-                    showLyrics = showLyrics,
-                    audioReactiveOn = audioReactiveOn,
-                    accent = accent,
-                    shownPositionMs = shownPositionMs,
-                    durationMs = durationMs,
-                    shownFraction = shownFraction,
-                    isScrubbing = dragFraction != null,
-                    onToggleLyrics = onToggleLyrics,
-                    onToggleAudioReactive = onToggleAudioReactive,
-                    onScrub = { fraction -> dragFraction = fraction },
-                    onFinishScrub = {
-                        dragFraction?.let { fraction ->
-                            if (durationMs > 0L) {
-                                onSeek((fraction * durationMs).toLong())
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val narrow = maxWidth < 620.dp
+                val playbackWidth = minOf(330.dp, maxWidth * 0.48f)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    DockSeekRow(
+                        isLandscape = true,
+                        showLyrics = showLyrics,
+                        audioReactiveOn = audioReactiveOn,
+                        desktopLyricsEnabled = desktopLyricsEnabled,
+                        accent = accent,
+                        shownPositionMs = shownPositionMs,
+                        durationMs = durationMs,
+                        shownFraction = shownFraction,
+                        isScrubbing = dragFraction != null,
+                        onToggleLyrics = onToggleLyrics,
+                        onToggleDesktopLyrics = onToggleDesktopLyrics,
+                        onToggleAudioReactive = onToggleAudioReactive,
+                        onScrub = { fraction -> dragFraction = fraction },
+                        onFinishScrub = {
+                            dragFraction?.let { fraction ->
+                                if (durationMs > 0L) {
+                                    onSeek((fraction * durationMs).toLong())
+                                }
                             }
-                        }
-                        dragFraction = null
-                    },
-                    onCancelScrub = { dragFraction = null },
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(18.dp))
-                PlaybackControls(
-                    player = player,
-                    accent = accent,
-                    compact = true,
-                    onToggle = onToggle,
-                    onNext = onNext,
-                    onPrevious = onPrevious,
-                    onToggleShuffle = onToggleShuffle,
-                    onCycleRepeat = onCycleRepeat,
-                    modifier = Modifier.width(330.dp)
-                )
+                            dragFraction = null
+                        },
+                        onCancelScrub = { dragFraction = null },
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(Modifier.width(if (narrow) 10.dp else 18.dp))
+                    PlaybackControls(
+                        player = player,
+                        accent = accent,
+                        compact = true,
+                        onToggle = onToggle,
+                        onNext = onNext,
+                        onPrevious = onPrevious,
+                        onToggleShuffle = onToggleShuffle,
+                        onCycleRepeat = onCycleRepeat,
+                        modifier = Modifier.width(playbackWidth)
+                    )
+                }
             }
         } else {
             DockSeekRow(
                 isLandscape = false,
                 showLyrics = showLyrics,
                 audioReactiveOn = audioReactiveOn,
+                desktopLyricsEnabled = desktopLyricsEnabled,
                 accent = accent,
                 shownPositionMs = shownPositionMs,
                 durationMs = durationMs,
                 shownFraction = shownFraction,
                 isScrubbing = dragFraction != null,
                 onToggleLyrics = onToggleLyrics,
+                onToggleDesktopLyrics = onToggleDesktopLyrics,
                 onToggleAudioReactive = onToggleAudioReactive,
                 onScrub = { fraction -> dragFraction = fraction },
                 onFinishScrub = {
@@ -1749,12 +2734,14 @@ private fun DockSeekRow(
     isLandscape: Boolean,
     showLyrics: Boolean,
     audioReactiveOn: Boolean,
+    desktopLyricsEnabled: Boolean,
     accent: Color,
     shownPositionMs: Long,
     durationMs: Long,
     shownFraction: Float,
     isScrubbing: Boolean,
     onToggleLyrics: () -> Unit,
+    onToggleDesktopLyrics: () -> Unit,
     onToggleAudioReactive: () -> Unit,
     onScrub: (Float) -> Unit,
     onFinishScrub: () -> Unit,
@@ -1772,6 +2759,14 @@ private fun DockSeekRow(
             active = showLyrics,
             accent = accent,
             onClick = onToggleLyrics
+        )
+        Spacer(Modifier.width(1.dp))
+        DockAction(
+            label = "浮",
+            description = if (desktopLyricsEnabled) "关闭桌面歌词" else "开启桌面歌词",
+            active = desktopLyricsEnabled,
+            accent = accent,
+            onClick = onToggleDesktopLyrics
         )
         Spacer(Modifier.width(5.dp))
         Text(

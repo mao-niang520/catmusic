@@ -18,9 +18,9 @@ The root CatMusic license does not relicense them.
 ## Sound field
 
 The full-screen sound field in `app/src/main/assets/soundfield/` — including
-the page layout, CSS, the 10,000-point cover globe, the perspective Echo wave
-lattice, the WebGL shaders, gesture handling and the Kotlin bridge — is
-**original CatMusic code**. It contains no third-party graphics libraries,
+the page layout, CSS, the roughly 10,000-point cover globe, the perspective
+Echo wave lattice, the WebGL shaders, gesture handling and the Kotlin bridge —
+is **original CatMusic code**. It contains no third-party graphics libraries,
 terrain scenes, geometries, shaders or copied assets. It is covered by the
 root CatMusic PolyForm Noncommercial license and by the copyright of the
 CatMusic author.
@@ -37,10 +37,12 @@ and the Android app requests no microphone permission.
   personal, noncommercial use and are subject to the platforms' terms.
 - CatMusic is not affiliated with, endorsed by, or maintained by any music
   platform, MusicDL, MusicSquare, QWEA0 or any other third party.
-- The developer's private signing key, real WeChat donation QR code, release
-  APKs, personal music library, downloaded audio and personal artwork are not
-  included. The `donation_wechat.jpg` in this repository is a deliberately
-  non-scannable placeholder.
+- The developer's private signing key, `keystore.properties`, personal music
+  library, downloaded audio and personal artwork are not included.
+- Per the author's request, `donation_wechat.jpg` is the real WeChat donation
+  QR code and is included in both this source repository and the public
+  release APK; it is not a placeholder. The public APK is provided as a
+  GitHub Release asset rather than committed to Git history.
 - The public screenshots in `docs/images/` use synthetic album artwork and
   demo lyrics. They contain no real album art, personal media or real lyrics.
 - This source export intentionally omits the developer's local MusicDL

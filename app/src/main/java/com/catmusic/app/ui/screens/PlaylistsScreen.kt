@@ -34,7 +34,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -73,6 +72,7 @@ import com.catmusic.app.data.Track
 import com.catmusic.app.ui.components.CoverArt
 import com.catmusic.app.ui.components.EqualizerBars
 import com.catmusic.app.ui.components.GlassCard
+import com.catmusic.app.ui.components.GlassDropdownMenu
 import com.catmusic.app.ui.components.GradientCtaButton
 import com.catmusic.app.ui.components.GradientTitle
 import com.catmusic.app.ui.components.PlayerUiSnapshot
@@ -448,12 +448,9 @@ private fun PlaylistCard(
                         modifier = Modifier.size(19.dp)
                     )
                 }
-                DropdownMenu(
+                GlassDropdownMenu(
                     expanded = menuOpen,
-                    onDismissRequest = { menuOpen = false },
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF1A1424))
+                    onDismissRequest = { menuOpen = false }
                 ) {
                     DropdownMenuItem(
                         text = { PlaylistMenuLabel("重命名") },
@@ -564,12 +561,9 @@ private fun PlaylistDetail(
                             modifier = Modifier.size(19.dp)
                         )
                     }
-                    DropdownMenu(
+                    GlassDropdownMenu(
                         expanded = menuOpen,
-                        onDismissRequest = { menuOpen = false },
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color(0xFF1A1424))
+                        onDismissRequest = { menuOpen = false }
                     ) {
                         DropdownMenuItem(
                             text = { PlaylistMenuLabel("重命名歌单") },
@@ -884,12 +878,9 @@ private fun PlaylistTrackRow(
                     modifier = Modifier.size(18.dp)
                 )
             }
-            DropdownMenu(
+            GlassDropdownMenu(
                 expanded = menuOpen,
-                onDismissRequest = { menuOpen = false },
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF1A1424))
+                onDismissRequest = { menuOpen = false }
             ) {
                 PlaylistTrackMenuItem(
                     iconRes = R.drawable.ic_info,

@@ -18,10 +18,13 @@ import androidx.media3.session.SessionToken
 import com.catmusic.app.data.AudioFileStore
 import com.catmusic.app.data.AudioVisualLevel
 import com.catmusic.app.data.ArtworkTransformer
+import com.catmusic.app.data.DesktopLyricsConfig
 import com.catmusic.app.data.HomeBackgroundStore
 import com.catmusic.app.data.HomeBackgroundStyle
 import com.catmusic.app.data.ImportState
+import com.catmusic.app.data.LibraryLayoutStyle
 import com.catmusic.app.data.LyricFrameRate
+import com.catmusic.app.data.LyricTranslationMode
 import com.catmusic.app.data.LyricsImporter
 import com.catmusic.app.data.MixedImporter
 import com.catmusic.app.data.MusicImporter
@@ -59,6 +62,13 @@ class CatMusicViewModel(application: Application) : AndroidViewModel(application
     val audioReactiveEnabled: StateFlow<Boolean> = repository.audioReactiveEnabled
     val audioVisualLevel: StateFlow<AudioVisualLevel> = repository.audioVisualLevel
     val lyricFrameRate: StateFlow<LyricFrameRate> = repository.lyricFrameRate
+    val lyricTranslationMode: StateFlow<LyricTranslationMode> =
+        repository.lyricTranslationMode
+    val fadeInMs: StateFlow<Int> = repository.fadeInMs
+    val fadeOutMs: StateFlow<Int> = repository.fadeOutMs
+    val desktopLyricsEnabled: StateFlow<Boolean> = repository.desktopLyricsEnabled
+    val desktopLyricsConfig: StateFlow<DesktopLyricsConfig> = repository.desktopLyricsConfig
+    val libraryLayoutStyle: StateFlow<LibraryLayoutStyle> = repository.libraryLayoutStyle
     val sleepTimerRemainingMs: StateFlow<Long> = SleepTimerState.remainingMs
     val sleepTimerTotalMs: StateFlow<Long> = SleepTimerState.totalMs
 
@@ -470,6 +480,30 @@ class CatMusicViewModel(application: Application) : AndroidViewModel(application
         repository.setLyricFrameRate(rate)
     }
 
+    fun setLyricTranslationMode(mode: LyricTranslationMode) {
+        repository.setLyricTranslationMode(mode)
+    }
+
+    fun setFadeInMs(value: Int) {
+        repository.setFadeInMs(value)
+    }
+
+    fun setFadeOutMs(value: Int) {
+        repository.setFadeOutMs(value)
+    }
+
+    fun setDesktopLyricsEnabled(enabled: Boolean) {
+        repository.setDesktopLyricsEnabled(enabled)
+    }
+
+    fun setDesktopLyricsConfig(config: DesktopLyricsConfig) {
+        repository.setDesktopLyricsConfig(config)
+    }
+
+    fun setLibraryLayoutStyle(style: LibraryLayoutStyle) {
+        repository.setLibraryLayoutStyle(style)
+    }
+
     fun saveQuickLink(link: QuickLink) {
         if (!repository.saveQuickLink(link)) {
             _messages.tryEmit("最多只能保存 $MAX_QUICK_LINKS 个网页快捷方式")
@@ -508,7 +542,7 @@ class CatMusicViewModel(application: Application) : AndroidViewModel(application
         val app = getApplication<Application>()
         val old = repository.customHomeBackground.value
         repository.setCustomHomeBackground(null)
-        repository.setHomeBackgroundStyle(HomeBackgroundStyle.AURORA)
+        repository.setHomeBackgroundStyle(HomeBackgroundStyle.METABALL)
         HomeBackgroundStore.delete(app, old)
         _messages.tryEmit("已恢复默认极光背景")
     }

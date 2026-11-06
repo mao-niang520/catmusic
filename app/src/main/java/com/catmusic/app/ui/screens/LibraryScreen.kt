@@ -2,7 +2,10 @@ package com.catmusic.app.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -14,6 +17,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -21,6 +25,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -32,14 +37,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -47,7 +55,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
@@ -59,11 +69,15 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.catmusic.app.R
+import com.catmusic.app.data.LibraryLayoutStyle
 import com.catmusic.app.data.ListeningStats
 import com.catmusic.app.data.Track
 import com.catmusic.app.ui.components.AppLogo
@@ -72,6 +86,7 @@ import com.catmusic.app.ui.components.CoverArt
 import com.catmusic.app.ui.components.EmptyHint
 import com.catmusic.app.ui.components.EqualizerBars
 import com.catmusic.app.ui.components.GlassCard
+import com.catmusic.app.ui.components.GlassDropdownMenu
 import com.catmusic.app.ui.components.GradientCtaButton
 import com.catmusic.app.ui.components.LiquidGlassSurface
 import com.catmusic.app.ui.components.GradientTitle
@@ -93,6 +108,8 @@ import com.catmusic.app.ui.theme.GlassBorderBright
 import com.catmusic.app.util.formatCompactDuration
 import com.catmusic.app.util.formatSongDuration
 import com.catmusic.app.util.formatStatDuration
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import java.time.LocalDate
@@ -105,6 +122,8 @@ fun LibraryScreen(
     tracks: List<Track>,
     statsFlow: StateFlow<ListeningStats>,
     player: PlayerUiSnapshot,
+    layoutStyle: LibraryLayoutStyle,
+    onChangeLayoutStyle: (LibraryLayoutStyle) -> Unit,
     onTrackAction: (Track) -> Unit,
     onShowImport: () -> Unit,
     onDeleteTrack: (Track) -> Unit,
@@ -156,7 +175,7 @@ fun LibraryScreen(
                         isPlaying = isPlaying
                     )
                 }
-                if (featured != null) {
+                if (featured != null && layoutStyle == LibraryLayoutStyle.LIST) {
                     item(key = "featured") {
                         FeaturedTrackCard(
                             track = featured,
@@ -171,9 +190,23 @@ fun LibraryScreen(
                 SectionHeader(
                     title = if (query.isBlank()) "全部音乐" else "搜索结果",
                     subtitle = if (query.isBlank()) {
-                        "共 ${tracks.size} 首 · 按最近导入排序"
+                        if (layoutStyle == LibraryLayoutStyle.VINYL) {
+                            "共 ${tracks.size} 首 · 方形唱片架"
+                        } else {
+                            "共 ${tracks.size} 首 · 按最近导入排序"
+                        }
                     } else {
                         "找到 ${filteredTracks.size} 首"
+                    },
+                    trailing = if (query.isBlank()) {
+                        {
+                            LibraryLayoutSwitch(
+                                selected = layoutStyle,
+                                onSelect = onChangeLayoutStyle
+                            )
+                        }
+                    } else {
+                        null
                     },
                     modifier = Modifier.padding(top = 4.dp)
                 )
@@ -186,6 +219,21 @@ fun LibraryScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 42.dp)
+                    )
+                }
+            } else if (query.isBlank() && layoutStyle == LibraryLayoutStyle.VINYL) {
+                item(key = "vinyl-shelf") {
+                    VinylShelf(
+                        tracks = tracks,
+                        player = player,
+                        onPlayTrack = onTrackAction,
+                        modifier = Modifier.animateItemPlacement()
+                    )
+                }
+                item(key = "footer") {
+                    LibraryFooter(
+                        trackCount = tracks.size,
+                        isPlaying = isPlaying
                     )
                 }
             } else {
@@ -207,24 +255,10 @@ fun LibraryScreen(
                     )
                 }
                 item(key = "footer") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp, bottom = 6.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        EqualizerBars(
-                            active = isPlaying,
-                            color = CatViolet.copy(alpha = 0.65f),
-                            modifier = Modifier.size(20.dp, 12.dp)
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "全部音乐已保存到软件内 · 共 ${tracks.size} 首",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = CatTextTertiary
-                        )
-                    }
+                    LibraryFooter(
+                        trackCount = tracks.size,
+                        isPlaying = isPlaying
+                    )
                 }
             }
         } else {
@@ -709,12 +743,9 @@ private fun TrackRow(
                         modifier = Modifier.size(19.dp)
                     )
                 }
-                DropdownMenu(
+                GlassDropdownMenu(
                     expanded = menuOpen,
-                    onDismissRequest = { menuOpen = false },
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF1A1424))
+                    onDismissRequest = { menuOpen = false }
                 ) {
                     DropdownMenuItem(
                         text = {
@@ -803,6 +834,468 @@ private fun TrackRow(
                         }
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LibraryLayoutSwitch(
+    selected: LibraryLayoutStyle,
+    onSelect: (LibraryLayoutStyle) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color.White.copy(alpha = 0.045f))
+            .border(
+                1.dp,
+                Color.White.copy(alpha = 0.07f),
+                RoundedCornerShape(50)
+            )
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        LibraryLayoutChip(
+            label = "列表",
+            iconRes = R.drawable.ic_library,
+            active = selected == LibraryLayoutStyle.LIST,
+            onClick = { onSelect(LibraryLayoutStyle.LIST) }
+        )
+        LibraryLayoutChip(
+            label = "唱片",
+            iconRes = R.drawable.ic_vinyl,
+            active = selected == LibraryLayoutStyle.VINYL,
+            onClick = { onSelect(LibraryLayoutStyle.VINYL) }
+        )
+    }
+}
+
+@Composable
+private fun LibraryLayoutChip(
+    label: String,
+    iconRes: Int,
+    active: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (active) CatLime.copy(alpha = 0.13f) else Color.Transparent)
+            .bouncyClickable(pressScale = 0.92f, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            tint = if (active) CatLime else CatTextTertiary,
+            modifier = Modifier.size(12.dp)
+        )
+        Spacer(Modifier.width(3.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 9.5.sp,
+                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium
+            ),
+            color = if (active) CatLime else CatTextTertiary
+        )
+    }
+}
+
+@Composable
+private fun LibraryFooter(trackCount: Int, isPlaying: Boolean) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        EqualizerBars(
+            active = isPlaying,
+            color = CatViolet.copy(alpha = 0.65f),
+            modifier = Modifier.size(20.dp, 12.dp)
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "全部音乐已保存到软件内 · 共 $trackCount 首",
+            style = MaterialTheme.typography.bodySmall,
+            color = CatTextTertiary
+        )
+    }
+}
+
+@Composable
+private fun VinylShelf(
+    tracks: List<Track>,
+    player: PlayerUiSnapshot,
+    onPlayTrack: (Track) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (tracks.isEmpty()) return
+    var selectedIndex by rememberSaveable {
+        mutableIntStateOf(
+            tracks.indexOfFirst { it.id == player.currentMediaId }
+                .takeIf { it >= 0 } ?: 0
+        )
+    }
+    LaunchedEffect(tracks.size) {
+        if (selectedIndex > tracks.lastIndex) {
+            selectedIndex = tracks.lastIndex.coerceAtLeast(0)
+        }
+    }
+    val index = selectedIndex.coerceIn(0, tracks.lastIndex)
+    val selected = tracks[index]
+    val accent = remember(selected.id) { coverPalette(selected.id).last() }
+    val isCurrent = selected.id == player.currentMediaId
+    val isPlaying = isCurrent && player.isPlaying
+
+    GlassCard(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(30.dp),
+        contentPadding = PaddingValues(0.dp),
+        borderColors = listOf(
+            accent.copy(alpha = 0.28f),
+            GlassBorderBright,
+            GlassBorder
+        )
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 18.dp, end = 18.dp, top = 15.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TinyLabel(
+                    text = "SQUARE VINYL",
+                    color = accent,
+                    background = accent.copy(alpha = 0.12f)
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = "${index + 1} / ${tracks.size}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = CatTextTertiary.copy(alpha = 0.78f)
+                )
+            }
+
+            VinylStage(
+                tracks = tracks,
+                centerIndex = index,
+                player = player,
+                onSelect = { selectedIndex = it },
+                onPlay = { onPlayTrack(it) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(292.dp)
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = selected.title,
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = CatCream,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = "${selected.artist} · ${selected.album}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CatTextTertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(8.dp))
+                if (tracks.size > 1) {
+                    Slider(
+                        value = index.toFloat(),
+                        onValueChange = { value ->
+                            selectedIndex = value.roundToInt()
+                                .coerceIn(0, tracks.lastIndex)
+                        },
+                        valueRange = 0f..tracks.lastIndex.toFloat(),
+                        colors = SliderDefaults.colors(
+                            thumbColor = CatLime,
+                            activeTrackColor = CatLime,
+                            inactiveTrackColor = Color.White.copy(alpha = 0.13f),
+                            activeTickColor = Color.Transparent,
+                            inactiveTickColor = Color.Transparent
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(38.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = formatSongDuration(selected.durationMs),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CatTextTertiary
+                        )
+                        Text(
+                            text = if (isPlaying) "正在播放" else "已选中",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isPlaying) CatLime else CatTextTertiary
+                        )
+                    }
+                }
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    text = "拖动进度条选歌 · 点唱片左下角播放",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = CatTextTertiary.copy(alpha = 0.66f)
+                )
+                Spacer(Modifier.height(14.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun VinylStage(
+    tracks: List<Track>,
+    centerIndex: Int,
+    player: PlayerUiSnapshot,
+    onSelect: (Int) -> Unit,
+    onPlay: (Track) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    BoxWithConstraints(
+        modifier = modifier.clipToBounds(),
+        contentAlignment = Alignment.Center
+    ) {
+        val recordSize = (maxWidth * 0.47f).coerceIn(124.dp, 178.dp)
+        val spacing = recordSize * 0.37f
+        val accent = remember(tracks[centerIndex].id) {
+            coverPalette(tracks[centerIndex].id).last()
+        }
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .size(recordSize * 1.92f)
+                .background(
+                    Brush.radialGradient(
+                        listOf(
+                            accent.copy(alpha = 0.16f),
+                            Color.Transparent
+                        )
+                    )
+                )
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .size(recordSize * 1.34f)
+                .border(
+                    1.dp,
+                    Color.White.copy(alpha = 0.06f),
+                    CircleShape
+                )
+        )
+
+        val start = (centerIndex - 4).coerceAtLeast(0)
+        val end = (centerIndex + 4).coerceAtMost(tracks.lastIndex)
+        for (index in start..end) {
+            val track = tracks[index]
+            val delta = index - centerIndex
+            key(track.id) {
+                val shift by animateDpAsState(
+                    targetValue = spacing * delta.toFloat(),
+                    animationSpec = spring(
+                        dampingRatio = 0.82f,
+                        stiffness = Spring.StiffnessMediumLow
+                    ),
+                    label = "vinylShift"
+                )
+                val scale by animateFloatAsState(
+                    targetValue = if (delta == 0) 1f else 0.80f,
+                    animationSpec = spring(
+                        dampingRatio = 0.80f,
+                        stiffness = Spring.StiffnessMediumLow
+                    ),
+                    label = "vinylScale"
+                )
+                val lift by animateDpAsState(
+                    targetValue = if (delta == 0) (-18).dp else (abs(delta) * 3).dp,
+                    animationSpec = spring(
+                        dampingRatio = 0.84f,
+                        stiffness = Spring.StiffnessMediumLow
+                    ),
+                    label = "vinylLift"
+                )
+                val angle by animateFloatAsState(
+                    targetValue = delta * 2.3f,
+                    animationSpec = spring(
+                        dampingRatio = 0.86f,
+                        stiffness = Spring.StiffnessMediumLow
+                    ),
+                    label = "vinylAngle"
+                )
+                VinylRecord(
+                    track = track,
+                    selected = delta == 0,
+                    playing = track.id == player.currentMediaId && player.isPlaying,
+                    size = recordSize,
+                    onSelect = { onSelect(index) },
+                    onPlay = { onPlay(track) },
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .offset(x = shift, y = lift)
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                            rotationZ = angle
+                        }
+                        .zIndex(if (delta == 0) 20f else 10f - abs(delta))
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VinylRecord(
+    track: Track,
+    selected: Boolean,
+    playing: Boolean,
+    size: Dp,
+    onSelect: () -> Unit,
+    onPlay: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val accent = remember(track.id) { coverPalette(track.id).last() }
+    val sleeveShape = RoundedCornerShape(18.dp)
+    Box(
+        modifier = modifier
+            .size(size)
+            .shadow(if (selected) 24.dp else 8.dp, sleeveShape, clip = false)
+            .bouncyClickable(pressScale = 0.97f) {
+                if (!selected) onSelect()
+            }
+    ) {
+        // A circular record peeks out from the right edge of the square sleeve.
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .offset(x = size * 0.11f)
+                .size(size * 0.91f)
+                .clip(CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        listOf(
+                            Color(0xFF2B2926),
+                            Color(0xFF11100F),
+                            Color(0xFF050505)
+                        )
+                    )
+                )
+                .border(1.dp, Color.White.copy(alpha = 0.09f), CircleShape)
+        ) {
+            Box(
+                Modifier
+                    .align(Alignment.Center)
+                    .size(size * 0.72f)
+                    .border(
+                        1.dp,
+                        Color.White.copy(alpha = 0.05f),
+                        CircleShape
+                    )
+            )
+            Box(
+                Modifier
+                    .align(Alignment.Center)
+                    .size(size * 0.54f)
+                    .border(
+                        1.dp,
+                        Color.White.copy(alpha = 0.045f),
+                        CircleShape
+                    )
+            )
+            Box(
+                Modifier
+                    .align(Alignment.Center)
+                    .size(size * 0.31f)
+                    .clip(CircleShape)
+                    .background(accent.copy(alpha = 0.86f))
+                    .border(
+                        1.dp,
+                        Color.White.copy(alpha = 0.16f),
+                        CircleShape
+                    )
+            )
+            Box(
+                Modifier
+                    .align(Alignment.Center)
+                    .size(5.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF08070A))
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(sleeveShape)
+                .background(Color(0xFF0B0A0F))
+                .border(1.dp, Color.White.copy(alpha = 0.11f), sleeveShape)
+        ) {
+            CoverArt(
+                artworkFile = track.artworkFile,
+                seed = track.id,
+                cornerRadius = 18.dp,
+                modifier = Modifier.fillMaxSize()
+            )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.32f)
+                            )
+                        )
+                    )
+            )
+        }
+
+        // Kept outside the clipped sleeve so the lower-left play control can
+        // stick out like a real record tab instead of being cut by the cover.
+        if (selected) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .offset(x = (-9).dp, y = 9.dp)
+                    .size(44.dp)
+                    .shadow(12.dp, CircleShape)
+                    .clip(CircleShape)
+                    .background(Brush.linearGradient(listOf(CatLime, CatMint)))
+                    .border(1.dp, Color.White.copy(alpha = 0.30f), CircleShape)
+                    .bouncyClickable(pressScale = 0.86f, onClick = onPlay),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    painter = painterResource(
+                        if (playing) R.drawable.ic_pause else R.drawable.ic_play
+                    ),
+                    contentDescription = if (playing) "暂停" else "播放",
+                    tint = Color(0xFF0C1007),
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
     }

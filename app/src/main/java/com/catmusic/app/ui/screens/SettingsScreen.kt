@@ -1,5 +1,11 @@
 package com.catmusic.app.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -26,8 +32,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -56,9 +65,11 @@ import com.catmusic.app.data.AudioVisualLevel
 import com.catmusic.app.data.HomeBackgroundStyle
 import com.catmusic.app.data.ListeningStats
 import com.catmusic.app.data.LyricFrameRate
+import com.catmusic.app.data.LyricTranslationMode
 import com.catmusic.app.data.QuickLink
 import com.catmusic.app.ui.components.AppLogo
 import com.catmusic.app.ui.components.GlassCard
+import com.catmusic.app.ui.components.GlassDropdownMenu
 import com.catmusic.app.ui.components.GradientTitle
 import com.catmusic.app.ui.components.TinyLabel
 import com.catmusic.app.ui.components.bouncyClickable
@@ -93,6 +104,10 @@ fun SettingsScreen(
     onSelectAudioVisualLevel: (AudioVisualLevel) -> Unit,
     lyricFrameRate: LyricFrameRate,
     onSelectLyricFrameRate: (LyricFrameRate) -> Unit,
+    lyricTranslationMode: LyricTranslationMode,
+    onSelectLyricTranslationMode: (LyricTranslationMode) -> Unit,
+    desktopLyricsEnabled: Boolean,
+    onToggleDesktopLyrics: (Boolean) -> Unit,
     onPickMixed: () -> Unit,
     onPickFiles: () -> Unit,
     onPickFolder: () -> Unit,
@@ -106,6 +121,39 @@ fun SettingsScreen(
     var showLicenses by remember { mutableStateOf(false) }
     var showDonation by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val overlayPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        val granted = Settings.canDrawOverlays(context)
+        onToggleDesktopLyrics(granted)
+        if (!granted) {
+            Toast.makeText(
+                context,
+                "需要允许 CatMusic 显示在其他应用上层，才能挂桌面歌词",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    val requestDesktopLyrics: (Boolean) -> Unit = { enabled ->
+        if (!enabled) {
+            onToggleDesktopLyrics(false)
+        } else if (Settings.canDrawOverlays(context)) {
+            onToggleDesktopLyrics(true)
+        } else {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:${context.packageName}")
+            )
+            runCatching { overlayPermissionLauncher.launch(intent) }.onFailure {
+                Toast.makeText(
+                    context,
+                    "当前系统无法打开悬浮窗权限设置",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
 
     LazyColumn(
         modifier = modifier
@@ -190,13 +238,19 @@ fun SettingsScreen(
             )
         }
 
-        item(key = "playback-label") {
-            GroupLabel("播放体验")
+        item(key = "lyrics-label") {
+            GroupLabel("歌词与桌面")
         }
-        item(key = "playback-group") {
-            AudioLevelCard(
-                selected = audioVisualLevel,
-                onSelect = onSelectAudioVisualLevel
+        item(key = "translation-card") {
+            LyricTranslationCard(
+                selected = lyricTranslationMode,
+                onSelect = onSelectLyricTranslationMode
+            )
+        }
+        item(key = "desktop-lyrics-card") {
+            DesktopLyricsCard(
+                enabled = desktopLyricsEnabled,
+                onToggle = requestDesktopLyrics
             )
         }
 
@@ -204,9 +258,11 @@ fun SettingsScreen(
             GroupLabel("画面与性能")
         }
         item(key = "render-group") {
-            LyricFrameRateCard(
-                selected = lyricFrameRate,
-                onSelect = onSelectLyricFrameRate
+            PerformanceCard(
+                audioLevel = audioVisualLevel,
+                onSelectAudioLevel = onSelectAudioVisualLevel,
+                frameRate = lyricFrameRate,
+                onSelectFrameRate = onSelectLyricFrameRate
             )
         }
 
@@ -291,7 +347,7 @@ fun SettingsScreen(
                         Spacer(Modifier.height(5.dp))
                         Text(
                             text = "导入时会把音频副本保存进 CatMusic 的私有空间，之后删除手机上的原文件不影响播放。在软件中删除只会移除软件副本、封面、歌词和歌单记录；手机原文件永远不会被软件删除。\n\n" +
-                                "“在线”页会联网检索、试听和下载公开音乐，只向接口发送搜索关键词；本地曲库、封面、歌词、歌单与统计始终留在设备上，不会上传。下载时默认使用无损，也可选择标准 / 较高音质（以来源实际支持为准），并选择存入播放器（加入音乐馆，可一并保存歌词）或仅保存到「音乐 / CatMusic」；两种保存位置彼此独立，也都不影响设备上的原文件。\n\n" +
+                                "“在线”页会联网检索、试听和下载公开音乐，只向接口发送搜索关键词；本地曲库、封面、歌单与统计始终留在设备上，不会上传。歌词默认也只在本机读取；只有手动开启「自动补全」时，缺少译文的外语歌词文本才会发送到公共翻译服务。下载时默认使用无损，也可选择标准 / 较高音质（以来源实际支持为准），并选择存入播放器（加入音乐馆，可一并保存歌词）或仅保存到「音乐 / CatMusic」；两种保存位置彼此独立，也都不影响设备上的原文件。\n\n" +
                                 "“音浪”声场直接分析解码后的本地音频电平、频段与节拍，不需要麦克风权限，不保存音频，也不会联网上传。可在播放页底部控制坞或右上角菜单随时开启或关闭。",
                             style = MaterialTheme.typography.bodySmall,
                             color = CatTextTertiary,
@@ -554,11 +610,11 @@ fun SettingsScreen(
 
                 Image(
                     painter = painterResource(R.drawable.donation_wechat),
-                    contentDescription = "微信赞赏二维码",
+                    contentDescription = "赞赏二维码",
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(3f / 4f)
+                        .aspectRatio(1f)
                         .clip(RoundedCornerShape(16.dp))
                 )
 
@@ -743,6 +799,221 @@ private fun AudioLevelCard(
     }
 }
 
+/**
+ * Compact replacement for the old audio-level and refresh-rate cards. Both
+ * choices live in one short card and open only when tapped, so the settings
+ * page no longer becomes a long stack of six-option grids.
+ */
+@Composable
+private fun PerformanceCard(
+    audioLevel: AudioVisualLevel,
+    onSelectAudioLevel: (AudioVisualLevel) -> Unit,
+    frameRate: LyricFrameRate,
+    onSelectFrameRate: (LyricFrameRate) -> Unit
+) {
+    var audioMenuOpen by remember { mutableStateOf(false) }
+    var frameMenuOpen by remember { mutableStateOf(false) }
+
+    GlassCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(25.dp)
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 17.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(CatMint.copy(alpha = 0.10f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_chart),
+                        contentDescription = null,
+                        tint = CatMint,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+                Spacer(Modifier.width(13.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "声场与动效",
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontWeight = FontWeight.Medium
+                        ),
+                        color = CatCream
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        text = "音浪密度与自适应刷新率 · 默认省电",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = CatTextTertiary
+                    )
+                }
+            }
+
+            CompactChoiceRow(
+                iconRes = R.drawable.ic_chart,
+                title = "音浪等级",
+                value = audioLevel.title,
+                accent = CatViolet,
+                menuOpen = audioMenuOpen,
+                onOpenMenu = { audioMenuOpen = true },
+                onDismissMenu = { audioMenuOpen = false },
+                options = AudioVisualLevel.entries.map { it.title },
+                selectedIndex = AudioVisualLevel.entries.indexOf(audioLevel),
+                onSelect = { index ->
+                    onSelectAudioLevel(AudioVisualLevel.entries[index])
+                }
+            )
+            Text(
+                text = audioLevel.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = CatTextTertiary.copy(alpha = 0.72f),
+                modifier = Modifier.padding(start = 45.dp, end = 17.dp, bottom = 8.dp)
+            )
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 45.dp, end = 17.dp)
+                    .height(1.dp)
+                    .background(Color.White.copy(alpha = 0.055f))
+            )
+            CompactChoiceRow(
+                iconRes = R.drawable.ic_refresh,
+                title = "动效刷新率",
+                value = frameRate.title,
+                accent = CatMint,
+                menuOpen = frameMenuOpen,
+                onOpenMenu = { frameMenuOpen = true },
+                onDismissMenu = { frameMenuOpen = false },
+                options = LyricFrameRate.entries.map { it.title },
+                selectedIndex = LyricFrameRate.entries.indexOf(frameRate),
+                onSelect = { index ->
+                    onSelectFrameRate(LyricFrameRate.entries[index])
+                }
+            )
+            Text(
+                text = when (frameRate) {
+                    LyricFrameRate.ADAPTIVE ->
+                        "默认：背景、歌词和音浪静止约 24fps、播放 30fps；滑动、切歌或歌词换行时短暂升到 60fps。"
+
+                    LyricFrameRate.UNLIMITED ->
+                        "跟随屏幕刷新率；最顺滑，耗电也最高。"
+
+                    else ->
+                        "${frameRate.description}；自动模式会更省电。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = CatTextTertiary.copy(alpha = 0.72f),
+                modifier = Modifier.padding(start = 45.dp, end = 17.dp, bottom = 12.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompactChoiceRow(
+    iconRes: Int,
+    title: String,
+    value: String,
+    accent: Color,
+    menuOpen: Boolean,
+    onOpenMenu: () -> Unit,
+    onDismissMenu: () -> Unit,
+    options: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit
+) {
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .bouncyClickable(pressScale = 0.985f, onClick = onOpenMenu)
+                .padding(horizontal = 17.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                painter = painterResource(iconRes),
+                contentDescription = null,
+                tint = accent.copy(alpha = 0.86f),
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = CatCream.copy(alpha = 0.88f)
+            )
+            Spacer(Modifier.weight(1f))
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(accent.copy(alpha = 0.10f))
+                    .padding(start = 10.dp, end = 7.dp, top = 5.dp, bottom = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = accent
+                )
+                Spacer(Modifier.width(4.dp))
+                Icon(
+                    painter = painterResource(R.drawable.ic_arrow_down),
+                    contentDescription = null,
+                    tint = accent.copy(alpha = 0.75f),
+                    modifier = Modifier.size(13.dp)
+                )
+            }
+        }
+        GlassDropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = onDismissMenu,
+            modifier = Modifier.widthIn(min = 196.dp)
+        ) {
+            options.forEachIndexed { index, option ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = option,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (index == selectedIndex) {
+                                accent
+                            } else {
+                                Color.White.copy(alpha = 0.82f)
+                            }
+                        )
+                    },
+                    trailingIcon = if (index == selectedIndex) {
+                        {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_check),
+                                contentDescription = null,
+                                tint = accent,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    onClick = {
+                        onSelect(index)
+                        onDismissMenu()
+                    }
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun LyricFrameRateCard(
     selected: LyricFrameRate,
@@ -842,13 +1113,194 @@ private fun LyricFrameRateCard(
             )
             Spacer(Modifier.height(5.dp))
             Text(
-                text = "「无限制」跟随屏幕刷新率；60Hz 屏幕上的 90 / 120 仍受屏幕上限限制。低帧率更省电，高帧率更顺滑。",
+                text = "「自适应」静止约 24fps、播放 30fps，交互或歌词换行时升到 60fps；「无限制」跟随屏幕。低帧率更省电，高帧率更顺滑。",
                 style = MaterialTheme.typography.bodySmall,
                 color = CatTextTertiary.copy(alpha = 0.72f),
                 lineHeight = 17.sp,
                 modifier = Modifier.padding(horizontal = 17.dp)
             )
             Spacer(Modifier.height(15.dp))
+        }
+    }
+}
+
+@Composable
+private fun LyricTranslationCard(
+    selected: LyricTranslationMode,
+    onSelect: (LyricTranslationMode) -> Unit
+) {
+    GlassCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(25.dp)
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 17.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(CatMint.copy(alpha = 0.10f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_lyrics),
+                        contentDescription = null,
+                        tint = CatMint,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+                Spacer(Modifier.width(13.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "歌词翻译",
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontWeight = FontWeight.Medium
+                        ),
+                        color = CatCream
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        text = "外语歌词可开启翻译，译文固定排在原文下方",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = CatTextTertiary
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 17.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+                LyricTranslationMode.entries.forEach { mode ->
+                    val active = mode == selected
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (active) CatMint.copy(alpha = 0.13f)
+                                else Color.White.copy(alpha = 0.035f)
+                            )
+                            .border(
+                                1.dp,
+                                if (active) CatMint.copy(alpha = 0.28f)
+                                else Color.White.copy(alpha = 0.06f),
+                                RoundedCornerShape(12.dp)
+                            )
+                            .bouncyClickable(pressScale = 0.94f) { onSelect(mode) }
+                            .padding(vertical = 9.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = mode.title,
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontWeight = if (active) FontWeight.SemiBold
+                                else FontWeight.Medium
+                            ),
+                            color = if (active) CatMint else CatTextSecondary
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = selected.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = CatTextSecondary,
+                modifier = Modifier.padding(horizontal = 17.dp)
+            )
+            Spacer(Modifier.height(5.dp))
+            Text(
+                text = if (selected == LyricTranslationMode.ONLINE) {
+                    "开启后，仅把缺少翻译的外语歌词文本发送到公共翻译服务；音频、封面、歌单与统计始终留在本机。译文会自动缓存，网络不佳时仍显示原文。"
+                } else {
+                    "歌词里的括号译文会自动拆成独立译文行，显示在原文下方；不再出现“原文（翻译）”这种挤在一起的排版。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = CatTextTertiary.copy(alpha = 0.72f),
+                lineHeight = 17.sp,
+                modifier = Modifier.padding(horizontal = 17.dp)
+            )
+            Spacer(Modifier.height(15.dp))
+        }
+    }
+}
+
+@Composable
+private fun DesktopLyricsCard(
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit
+) {
+    GlassCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(25.dp)
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .bouncyClickable(pressScale = 0.985f) { onToggle(!enabled) }
+                    .padding(horizontal = 17.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(CatLime.copy(alpha = 0.10f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_lyrics),
+                        contentDescription = null,
+                        tint = CatLime,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+                Spacer(Modifier.width(13.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "桌面歌词",
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontWeight = FontWeight.Medium
+                        ),
+                        color = CatCream
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        text = "播放页点「浮」或媒体通知按钮即可打开",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = CatTextTertiary
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = null,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color(0xFF11140A),
+                        checkedTrackColor = CatLime,
+                        uncheckedThumbColor = CatTextSecondary,
+                        uncheckedTrackColor = Color.White.copy(alpha = 0.07f),
+                        uncheckedBorderColor = Color.White.copy(alpha = 0.16f)
+                    )
+                )
+            }
+            Text(
+                text = "需要系统悬浮窗权限；只在 CatMusic 退到后台时出现。悬浮窗上可切样式、调颜色和字号；锁定后完全点击穿透，不影响打游戏，点小「解锁」恢复控制。译文跟随上面的歌词翻译设置。",
+                style = MaterialTheme.typography.bodySmall,
+                color = CatTextTertiary.copy(alpha = 0.7f),
+                lineHeight = 17.sp,
+                modifier = Modifier.padding(start = 17.dp, end = 17.dp, bottom = 15.dp)
+            )
         }
     }
 }

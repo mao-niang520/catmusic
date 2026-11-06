@@ -1,10 +1,5 @@
 package com.catmusic.app.ui.components
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -14,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,16 +67,7 @@ fun CoverStage(
             )
         }
     }
-    val transition = rememberInfiniteTransition(label = "coverDust")
-    val time by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(48_000, easing = LinearEasing),
-            repeatMode = androidx.compose.animation.core.RepeatMode.Restart
-        ),
-        label = "coverDustTime"
-    )
+    val motionNanos = LocalAdaptiveMotionNanos.current
     val twoPi = 2f * PI.toFloat()
 
     BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
@@ -94,6 +79,7 @@ fun CoverStage(
             contentAlignment = Alignment.Center
         ) {
             Canvas(Modifier.fillMaxSize()) {
+                val time = (motionNanos.value / 1_000_000_000f / 48f) % 1f
                 val half = artSize.toPx() / 2f
                 val middle = center
                 val audio = if (isPlaying && effectsEnabled) {

@@ -9,6 +9,8 @@ enum class HomeBackgroundStyle(
     val title: String,
     val description: String
 ) {
+    METABALL("metaball", "熔岩流体", "品红与深紫的 MetaBall 粘稠融合，中心自动留白"),
+    HAZE("haze", "朦胧流体", "蓝红交融的朦胧光晕与柔光褶皱"),
     AURORA("aurora", "极光", "冷暖交织的极光与细碎星尘"),
     LIQUID("liquid", "液态流光", "虹彩光团与声波圆环，玻璃感最强"),
     STARFIELD("starfield", "星海", "深蓝星野、稀疏星云与远山"),
@@ -19,6 +21,6 @@ enum class HomeBackgroundStyle(
 
     companion object {
         fun fromKey(value: String?): HomeBackgroundStyle =
-            entries.firstOrNull { it.key == value } ?: AURORA
+            entries.firstOrNull { it.key == value } ?: METABALL
     }
 }
